@@ -1,0 +1,36 @@
+# Claude Code internals
+.claude/
+.zcode/
+.DS_Store
+.mcp.json
+
+# Build artifacts
+target/
+dist/
+build/
+*.class
+*.jar
+*.war
+*.pyc
+*.pyo
+
+# Never commit per-engagement state or credentials
+state/scope.yaml
+state/threat-model.md
+state/slice-queue.md
+state/findings.jsonl
+state/slices/
+state/pocs/
+memory/
+
+# Runtime artifacts
+.ratelimit.json
+.lastrun
+runs/
+.venv/
+__pycache__/
+
+# Per-target engagement state (scope/auth must never be committed)
+targets/
+.scope-unlocked
+.env

@@ -1,0 +1,81 @@
+# =====================================================================
+# offsec-agent scope config — HUMAN-OWNED. scope.yaml itself cannot be
+# written by the agent (hook-enforced). Two supported bootstrap paths:
+#   a) edit this file by hand, or
+#   b) tell the agent your program/target in plain language — it drafts
+#      state/scope.proposed.yaml (for HackerOne it can fetch the scope
+#      via tools/fetch_h1_scope.py using H1_USERNAME/H1_TOKEN env vars),
+#      and YOU approve with:  mv state/scope.proposed.yaml state/scope.yaml
+# =====================================================================
+
+engagement: ""                      # e.g. "acme-bb-2026Q4" or "portal-internal-pentest"
+
+authorization:
+  type: ""                          # bug-bounty | pentest
+  reference: ""                     # program URL, signed SOW path, or internal ticket
+  authorized_by: ""                 # who signed off
+  valid_until: ""                   # YYYY-MM-DD — engagement must be re-authorized after this
+
+in_scope:
+  # Bug bounty: list the program's in-scope hostnames (wildcards allowed, "*.example.com").
+  # Pentest: usually one to a few URLs — one entry per URL target is fine.
+  hostnames: []
+  ips: []
+  cidrs: []
+
+off_limits:
+  # Anything matching here is blocked unconditionally, even if also in in_scope.
+  hostnames: []
+  ips: []
+  cidrs: []
+
+test_infrastructure:
+  # Hosts OUTSIDE the program scope that are still legitimately contacted
+  # because they are required to test in-scope features. Two cases:
+  #   1. your own testing infra — Burp Collaborator (*.oast.fun), VPS, webhooks
+  #   2. target-owned dependencies — the CDN/API/auth domains the in-scope app
+  #      loads from (e.g. app JS served from cdn.target-cdn.net). Testing the
+  #      feature is impossible without touching them.
+  # This list is DYNAMIC: when testing reveals a dependency mid-engagement,
+  # add it here with a one-line reason and continue. off_limits above is still
+  # the absolute override.
+  hostnames: []
+  ips: []
+  cidrs: []
+
+roe:
+  max_network_commands_per_minute: 30   # coarse throttle enforced by the hook
+  max_requests_per_second: 5            # enforced by tools/poc_replay.py
+  allowed_windows: []                   # optional: "09:00-17:00"; empty = anytime
+  # Proportionality gate for volume, not for single handcrafted tests (even 5-10 payloads
+  # are never "high volume"; lab targets — localhost / private RFC1918 / *.local — exempt).
+  # Applies to: payload matrices >20 requests against one endpoint, fuzzing, and any
+  # scripted request loop against a live target.
+  #   ask   = agent proposes the volume and asks the human before launching (default)
+  #   allow = free
+  #   deny  = never on this target
+  high_volume_probing: ask
+  notes: ""                             # program-specific rules (no scanning, contact first, etc.)
+
+reporting:
+  # The two engagement types differ in WHAT GETS REPORTED:
+  #   bug-bounty → submit only verified, in-scope, bounty-eligible findings
+  #                (informational/low-value noise is NOT submitted)
+  #   pentest    → report EVERYTHING that matters to the client: criticals
+  #                through informational/hardening observations, plus the
+  #                coverage statement and methodology (assessment completeness)
+  engagement_type: ""                   # bug-bounty | pentest (drives report phase behavior)
+  include_informational: false          # pentest: true. bounty: false
+  severity_scale: ""                    # cvss | owasp | internal:<scheme-name>
+  report_format: ""                     # markdown | platform-html | client-template-path
+
+test_accounts:
+  # NEVER put credentials here. Reference the external store.
+  credentials_ref: ""               # e.g. "1Password: Engage/Acme QA accounts"
+  provisioning_notes: ""            # how to obtain sessions/tokens for authenticated testing
+
+recon:
+  # Optional: point at an existing recon output (e.g. your Enum tool) instead of
+  # re-running enumeration. Expected contents (subdomain_recon.py layout):
+  #   subfinder.txt, live_web_clean.jsonl, screenshot_targets.txt, gallery.html
+  enum_output_dir: ""
