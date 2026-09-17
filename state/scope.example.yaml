@@ -57,6 +57,18 @@ roe:
   high_volume_probing: ask
   notes: ""                             # program-specific rules (no scanning, contact first, etc.)
 
+program_rules:
+  # Per-CLASS eligibility gate. Fill this from `python3 tools/h1.py rules <handle>` (scope
+  # eligibility + the FULL policy). Rule: no class is TESTED unless it passes here — the asset
+  # must be eligible_for_bounty AND eligible_for_submission, the class must not be excluded,
+  # the target must be inside test_environment, and the finding within max_severity.
+  # An excluded class is chain-or-kill only; never reported standalone.
+  asset_eligibility_notes: ""           # e.g. "*.x.com bounty; 3 subdomains NO-BOUNTY override wildcard"
+  excluded_classes: []                  # e.g. ["missing headers", "self-XSS", "rate-limit-only", "SPF/DMARC"]
+  chained_only_classes: []              # valid only WITH a named impact, e.g. ["open redirect", "clickjacking"]
+  test_environment: ""                  # e.g. "testnet only", "own trial accounts only"
+  max_severity: ""                      # per-asset if it differs
+
 reporting:
   # The two engagement types differ in WHAT GETS REPORTED:
   #   bug-bounty → submit only verified, in-scope, bounty-eligible findings

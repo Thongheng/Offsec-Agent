@@ -19,9 +19,14 @@ Placeholders `{{NAME}}` are substituted from --var NAME=value. The target must p
 state/scope.yaml (authoritative check — the hook is best-effort for Bash one-liners).
 Requests are rate-limited per the scope RoE (max_requests_per_second).
 
+Every send is appended to `requests.jsonl` in the engagement folder (ts, method, host,
+path, status, bundle) so RoE rate compliance is auditable after the fact — no headers or
+bodies, so no credentials are written.
+
 Usage:
   python3 tools/poc_replay.py poc.md --dry-run          # show scope check + request, send nothing
   python3 tools/poc_replay.py poc.md --var HOST=app.internal --var TOKEN=abc
+  python3 tools/poc_replay.py poc.md --quiet --var ...  # status + body only (skip CSP header flood)
 """
 from __future__ import annotations
 
@@ -112,10 +117,36 @@ def rate_limit_wait(scope_cfg: dict) -> None:
         f.write(str(time.time()))
 
 
+def record_request(meta: dict, method: str, host: str, path: str,
+                   status: int | None, error: str | None = None) -> None:
+    """Append one telemetry line per send so RoE rate compliance is auditable.
+
+    Written to `requests.jsonl` in the engagement folder: ts, method, host, path,
+    status, bundle name. Never contains headers/bodies, so no credentials land here.
+    """
+    row = {
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "method": method,
+        "host": host,
+        "path": path,
+        "status": status,
+        "bundle": meta.get("name") or meta.get("finding") or None,
+    }
+    if error:
+        row["error"] = error
+    try:
+        with open(os.path.join(str(engagement_root()), "requests.jsonl"), "a") as f:
+            f.write(json.dumps(row) + "\n")
+    except Exception:
+        pass  # telemetry must never break a send
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("bundle")
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--quiet", action="store_true",
+                    help="suppress request echo and response headers (print status + body only)")
     ap.add_argument("--var", action="append", default=[], help="NAME=value")
     args = ap.parse_args()
 
@@ -158,7 +189,8 @@ def main() -> int:
         print("BLOCKED by scope.")
         return 1
 
-    print(f"\n--- request ({method} {host}{path}) ---\n{raw}\n")
+    if not args.quiet:
+        print(f"\n--- request ({method} {host}{path}) ---\n{raw}\n")
 
     if args.dry_run:
         print("dry-run: nothing sent.")
@@ -188,15 +220,18 @@ def main() -> int:
                      headers=dict(headers), encode_chunked=False)
         resp = conn.getresponse()
         data = resp.read(64 * 1024)
+        record_request(meta, method, host_of(host), path, resp.status)
         print(f"--- response ---\nHTTP/1.1 {resp.status} {resp.reason}")
-        for k, v in resp.getheaders():
-            print(f"{k}: {v}")
-        print()
+        if not args.quiet:
+            for k, v in resp.getheaders():
+                print(f"{k}: {v}")
+            print()
         try:
             print(data.decode("utf-8", "replace"))
         except Exception:
             print(repr(data))
     except Exception as e:
+        record_request(meta, method, host_of(host), path, None, error=str(e))
         print(f"request failed: {e}")
         return 1
     return 0

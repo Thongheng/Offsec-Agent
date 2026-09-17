@@ -64,7 +64,13 @@ def new_target(name: str) -> Path:
     example = REPO / "state" / "scope.example.yaml"
     if example.exists():
         (root / "scope.proposed.yaml").write_text(example.read_text())
-    (root / "findings.jsonl").touch()
-    (root / "log.jsonl").touch()
+    for ledger in ("findings", "log", "coverage-map", "leads"):
+        (root / f"{ledger}.jsonl").touch()
+    # required pipeline artifacts (Stage 1 plan / Stage 2 environment)
+    for tmpl, out in (("plan.template.md", "plan.md"),
+                      ("environment.template.md", "environment.md")):
+        t = REPO / "state" / tmpl
+        if t.exists():
+            (root / out).write_text(t.read_text())
     (REPO / "targets" / ".current").write_text(n + "\n")
     return root

@@ -9,6 +9,7 @@ Usage:
   python3 tools/h1.py programs [--mine]            # list programs (handle, bounties?, state)
   python3 tools/h1.py program <handle>             # details: policy, submission state, offers
   python3 tools/h1.py scope <handle>               # structured scope table
+  python3 tools/h1.py rules <handle>               # scope eligibility + FULL policy (per-class gate)
   python3 tools/h1.py init <handle>                # scope → targets/<current>/scope.proposed.yaml
   python3 tools/h1.py hacktivity "team_handle:\"acme\""   # disclosed reports + payouts
   python3 tools/h1.py pick h1 h2 h3                # compare candidates (reliable signals)
@@ -130,27 +131,62 @@ def cmd_programs(mine_only: bool) -> None:
 
 def cmd_program(handle: str) -> None:
     d = get(f"/hackers/programs/{handle}")
-    a = d.get("attributes") or attr(d["data"])  # single-program responses are UNWRAPPED
-    rel = d["data"].get("relationships", {})
+    a = d.get("attributes") or attr(d.get("data", {}))  # single-program responses are UNWRAPPED
     print(f"handle:            {a.get('handle')}")
     print(f"name:              {a.get('name')}")
     print(f"offers bounties:   {a.get('offers_bounties')}")
     print(f"submission state:  {a.get('submission_state')}")
     print(f"open scope:        {a.get('open_scope')}")
     print(f"reports required:  {a.get('reports_required_for_bounty')}")
+    print(f"triage active:     {a.get('triage_active')}   fast payments: {a.get('fast_payments')}   "
+          f"safe harbor: {a.get('gold_standard_safe_harbor')}")
     policy = (a.get("policy") or "").strip()
-    print(f"\n--- policy (first 3000 chars — READ IT: automation rules, RoE, exclusions) ---")
-    print(policy[:3000] or "(no policy text)")
+    print(f"\n--- policy (FULL, {len(policy)} chars — READ IT: test env, excluded vuln classes, RoE) ---")
+    print(policy or "(no policy text)")
+
+
+def cmd_rules(handle: str) -> None:
+    """One-shot program-detail audit: per-asset eligibility + the FULL policy.
+
+    Run this BEFORE planning any tests. A class is only worth testing when the asset is
+    eligible_for_bounty AND eligible_for_submission, the class is NOT on the excluded list,
+    the target is inside the stated test environment, and it is within max_severity. Encode
+    the result in scope.yaml -> program_rules so tests are gated per class, not fired blind.
+    """
+    print(f"===== {handle}: asset eligibility =====\n")
+    cmd_scope(handle)
+    print(f"\n\n===== {handle}: full program policy (READ for excluded vuln classes + test env) =====\n")
+    cmd_program(handle)
+    print("\n\n===== per-class eligibility gate =====")
+    print("Before testing any class, confirm ALL of:")
+    print("  1. the ASSET is eligible_for_bounty AND eligible_for_submission (not just one);")
+    print("  2. the CLASS is not in the policy's excluded-vulnerability-class list;")
+    print("  3. the target is inside the stated TEST ENVIRONMENT (testnet / own trial / etc.);")
+    print("  4. the finding is within max_severity and any partial-scope instruction.")
+    print("Record accepted/excluded classes in scope.yaml -> program_rules. Only fire classes that")
+    print("pass; excluded classes are chain-or-kill, never reported standalone.")
 
 
 def cmd_scope(handle: str) -> None:
+    """Full structured-scope audit: eligibility (BOUNTY and SUBMISSION are distinct!),
+    max_severity, and the FULL per-asset instruction (partial scope, tier, notes).
+    Never truncate the instruction — it often carries the real scope boundary."""
+    import textwrap
     rows = paginate(f"/hackers/programs/{handle}/structured_scopes")
     for r in rows:
         a = attr(r)
-        elig = "IN" if a.get("eligible_for_bounty") else "out"
-        instr = (a.get("instruction") or "").replace("\n", " ")[:60]
-        print(f"{elig:3s} {a.get('asset_type','?'):10s} {a.get('asset_identifier','?'):40s} {instr}")
-    print(f"\n{len(rows)} asset(s)")
+        b = "bounty" if a.get("eligible_for_bounty") else "NO-BOUNTY"
+        s = "submit" if a.get("eligible_for_submission") else "NO-SUBMIT"
+        print(f"{a.get('asset_type','?'):11s} {a.get('asset_identifier','?')}")
+        print(f"            eligibility: {b} / {s}   max_severity: {a.get('max_severity') or '-'}")
+        instr = (a.get("instruction") or "").strip()
+        if instr:
+            for i, line in enumerate(textwrap.wrap(instr, 100)):
+                print(f"            {'instruction: ' if i == 0 else '             '}{line}")
+    eligible = sum(1 for r in rows if attr(r).get("eligible_for_submission"))
+    print(f"\n{len(rows)} asset(s): {eligible} eligible_for_submission, {len(rows) - eligible} NOT")
+    print("reminder: read the FULL policy too (test env, excluded vuln classes, automation rules):")
+    print(f"  python3 tools/h1.py program {handle}")
 
 
 def normalize_host(asset: str) -> str:
@@ -190,7 +226,16 @@ def to_yaml(data: dict, handle: str, name: str) -> str:
     lines += [f'    - "{h}"' + (f"   # {i}" if i else "") for h, i in oos]
     lines += ["  ips: []", "  cidrs: []", "", "roe:",
               "  max_network_commands_per_minute: 30", "  max_requests_per_second: 5",
-              "  allowed_windows: []", '  notes: ""', "", "reporting:",
+              "  allowed_windows: []", '  notes: ""', "",
+              "program_rules:",
+              "  # Per-CLASS eligibility gate — fill from `python3 tools/h1.py rules <handle>`.",
+              "  # No class is tested unless it passes here (asset eligible + class not excluded).",
+              "  asset_eligibility_notes: \"\"   # eligible_for_bounty AND eligible_for_submission; partial scope",
+              "  excluded_classes: []           # classes the program will NOT accept",
+              "  chained_only_classes: []       # valid only WITH a named impact (open redirect, self-XSS, ...)",
+              "  test_environment: \"\"           # e.g. 'testnet only', 'own trial only'",
+              "  max_severity: \"\"", "",
+              "reporting:",
               "  engagement_type: bug-bounty", "  include_informational: false",
               "  severity_scale: cvss", "", "test_accounts:", '  credentials_ref: ""',
               '  provisioning_notes: ""', "", "recon:", '  enum_output_dir: ""']
@@ -223,19 +268,35 @@ def cmd_hacktivity(query: str) -> None:
 
 
 def cmd_pick(handles: list[str]) -> None:
-    """Decision support: reliable signals + paid-disclosure counts per candidate."""
+    """Decision support: reliable signals + paid-disclosure counts per candidate.
+
+    Read alongside prompts/targeting.md. The disclosed-SHAPE lines are the important output —
+    they are the program's accepted taste; replicate a shape on its feature/siblings. Payout
+    columns are CONTEXT ONLY: severity/payout never filter what you test, and no column here
+    tells you whether you can REACH the bug-bearing surface (Gate 1) — that is an environment
+    question, settle it before hunting.
+    """
     from urllib.parse import quote
-    print(f"{'handle':16s} {'bounty':6s} {'fast$':5s} {'GSSH':4s} {'triage':6s} {'paid':>5s} {'top payouts'}")
+    print(f"{'handle':16s} {'bounty':6s} {'fast$':5s} {'GSSH':4s} {'triage':6s} {'paid':>5s} {'disc':>5s} {'top payouts'}")
     for h in handles:
         a = get(f"/hackers/programs/{h}").get("attributes", {})
         try:
             d = get("/hackers/hacktivity", f"queryString={urllib.parse.quote(f'team_handle:\"{h}\" AND total_awarded_amount:>0')}&page[size]=100")
-            amts = sorted([r["attributes"].get("total_awarded_amount") or 0 for r in d.get("data", [])], reverse=True)
+            paid = d.get("data", [])
+            amts = sorted([r["attributes"].get("total_awarded_amount") or 0 for r in paid], reverse=True)
         except SystemExit:
-            amts = []
+            paid, amts = [], []
+        try:
+            alld = get("/hackers/hacktivity", f"queryString={urllib.parse.quote(f'team_handle:\"{h}\"')}&page[size]=100")
+            titles = [(r["attributes"].get("title") or "").strip() for r in alld.get("data", [])]
+        except SystemExit:
+            titles = []
         print(f"{h:16s} {str(a.get('offers_bounties')):6s} {str(a.get('fast_payments')):5s} "
               f"{str(a.get('gold_standard_safe_harbor')):4s} {str(a.get('triage_active')):6s} "
-              f"{len(amts):>5d} {amts[:3]}")
+              f"{len(amts):>5d} {len(titles):>5d} {amts[:3]}")
+        # disclosed SHAPES (accepted taste) — read these before choosing a focus feature
+        for t in titles[:3]:
+            print(f"{'':16s}   ↳ {t[:96]}")
 
 
 def cmd_reports() -> None:
@@ -268,6 +329,8 @@ def main() -> int:
         cmd_program(rest[0])
     elif cmd == "scope" and rest:
         cmd_scope(rest[0])
+    elif cmd == "rules" and rest:
+        cmd_rules(rest[0])
     elif cmd == "init" and rest:
         cmd_init(rest[0])
     elif cmd == "hacktivity" and rest:

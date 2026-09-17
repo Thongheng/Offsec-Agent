@@ -61,7 +61,10 @@ WAF interstitial with 200, "discovering" nothing). Rules:
    (Cloudflare), `__cf_bm` cookie (CF Bot Management), `X-Akamai-*`/`dtCookie` (Akamai),
    `x-sucuri-id`, etc. Only if headers are ambiguous AND the decision matters, use wafw00f.
    Re-check `roe.notes` for scanner bans → banned program skips ffuf entirely (handcrafted
-   low-volume paths or passive discovery only).
+   low-volume paths or passive discovery only). Also pre-flight the CNAME/vendor: a host
+   fronting a third-party SaaS product (Statuspage `*.stspg-customer.com`, Webflow
+   `cdn.webflow.com`, Mintlify `cname.mintlify.builders`, ...) is not the program's code —
+   log it as a vendor host and do not fuzz it (any bug is the vendor's and N/A).
 2. **Route through Burp**: `ffuf -x http://127.0.0.1:8080 ...` — traffic inherits Burp's
    TLS/HTTP stack, lands in proxy history (you SEE blocks immediately), and respects
    Burp's upstream-proxy config if one is set.

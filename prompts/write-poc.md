@@ -26,7 +26,10 @@ Rules:
 
 1. **Placeholders** `{{NAME}}` for everything environment-specific (hosts, tokens, emails).
    `tools/poc_replay.py --var HOST=... --var TOKEN=...` substitutes them. Secrets come from
-   the test-account store referenced in `state/scope.yaml` — never inline them.
+   the test-account store referenced in `state/scope.yaml` — never inline them. This includes
+   live session material captured while testing: never paste a real `Cookie:`/`__session`/
+   bearer value into a bundle, replace it with `{{SESSION_COOKIE}}`/`{{TOKEN}}`. A bundle with
+   a raw session cookie in it is a credential leak even though `targets/` is gitignored.
 2. **Minimal request**: the smallest request that demonstrates impact. Drop noise headers.
 3. **Harmless by default**: payloads must demonstrate the impact without destroying data
    (read/flag values, not deletes). No exfil to third-party hosts; use the engagement's

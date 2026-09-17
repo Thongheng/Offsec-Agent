@@ -7,8 +7,21 @@ targets.
 First read `state/scope.yaml` → `recon.enum_output_dir` and `reporting.engagement_type`, then
 take the matching branch. **Everything you touch must be inside `in_scope` — the scope gate is
 enforced in code; if a command is blocked, report it and move on, never work around it.**
+Before enumerating a bug-bounty target, confirm the H1 scope was audited and encoded
+(`AGENTS.md` → "H1 scope audit"). Live/browsed ≠ eligible: recon routinely surfaces hosts
+that are explicitly `out` (they override a wildcard) — drop them from the inventory.
 
 ## Branch A — bug bounty (broad surface)
+
+**Scope-shape first.** Read the policy's scope form before enumerating:
+- **Listed-assets-only / narrow scope** (no wildcard, e.g. "only these hosts, and only your own
+  trial"): do **not** run domain-wide subdomain enumeration — it discovers hosts you are not
+  authorized to test and burns RoE budget for nothing (files-bbp ran `subfinder -d files.com` →
+  2734 unauthorized customer subdomains on a listed-assets program). Enumerate only the listed
+  hosts.
+- **Fresh/under-tested assets are Tier A by default.** A host or feature added recently (scope
+  diff, changelog, "new" marker) with few or no prior reports is the highest-yield surface — put
+  it at the front even if it looks uninteresting.
 
 If `recon.enum_output_dir` points at a completed recon run (your Enum tool layout), consume it
 instead of re-enumerating — the human already spent that time:
@@ -33,11 +46,18 @@ instead of re-enumerating — the human already spent that time:
    - **Tier B (uncertain):** ambiguous titles, old-tech signals. ONE cheap benign probe
      (fingerprint GET) each, batched within RoE caps — never a scan.
    - **Tier C (one line each, no probing):** marketing pages, parked domains, redirects,
-     same-content-hash clones (your Enum already grouped these).
+     hosts fronting a recognized third-party SaaS product (Statuspage, Webflow, Mintlify,
+     Zendesk, ... — identify by the CNAME target and Server header), same-content-hash clones
+     (your Enum already grouped these). Record the vendor in one line; do not fuzz it — a bug
+     there belongs to the vendor and is N/A for the program.
    Tiering is a HYPOTHESIS from metadata — boring titles can hide old apps; that's what
    Tier B probes resolve, not guesses.
 5. **Directory search on Tier A hosts ONLY** (custom apps, auth portals, APIs — never
-   Tier C marketing/parked, never scanner-banned programs):
+   Tier C marketing/parked/vendor-SaaS, never scanner-banned programs). Pre-flight each host:
+   if its CNAME resolves to a known SaaS suffix (e.g. `*.stspg-customer.com`,
+   `cdn.webflow.com`, `cname.mintlify.builders`) or its responses carry a third-party product
+   banner, skip it and log a recon note — a 7,000-request scan to confirm "vendor product,
+   N/A" is pure waste.
    ```
    ffuf -w <SecLists>/Discovery/Web-Content/raft-small-words.txt \
         -u https://<tier-a-host>/FUZZ -x http://127.0.0.1:8080 -ac \

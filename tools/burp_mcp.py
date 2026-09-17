@@ -215,10 +215,33 @@ def normalize_history_entry(item: dict) -> dict | None:
     return entry
 
 
+def _decode_concatenated(text: str) -> list | None:
+    """Decode one-or-more whitespace-separated JSON values (Burp's history tool
+    returns the metadata header line followed by newline-concatenated objects,
+    not a JSON array). Returns None if the text is not clean JSON values."""
+    dec = json.JSONDecoder()
+    items, i, n = [], 0, len(text)
+    while i < n:
+        while i < n and text[i] in " \t\r\n":
+            i += 1
+        if i >= n:
+            break
+        try:
+            obj, i = dec.raw_decode(text, i)
+        except json.JSONDecodeError:
+            return None
+        items.append(obj)
+    return items
+
+
 def _parse_history_items(text: str) -> list | None:
     """Extract history items from a tool response. Handles the optional
-    '[Total: N | Returned: N | ...]' metadata header and list/dict shapes."""
+    '[Total: N | Returned: N | ...]' metadata header, a JSON array, and the
+    newline-concatenated JSON-object stream Burp actually returns."""
     text = text.strip()
+    # Burp returns a plain human sentence when nothing matches (not an error).
+    if re.match(r"(?i)^no items? found", text):
+        return []
     if text.startswith("["):
         nl = text.find("\n")
         head = text if nl == -1 else text[:nl]
@@ -229,22 +252,57 @@ def _parse_history_items(text: str) -> list | None:
     try:
         parsed = json.loads(text)
     except json.JSONDecodeError:
-        return None
+        parsed = _decode_concatenated(text)
+        if parsed is None:
+            return None
     if isinstance(parsed, list):
         return parsed
     return parsed.get("data") or parsed.get("items") or parsed.get("history")
 
 
+# Static/non-testable extensions dropped from the surface feed (unexploitable noise:
+# images, fonts, scripts, media, PDFs). Requests to these are almost never the bug.
+STATIC_EXT = {"js", "css", "png", "jpg", "jpeg", "gif", "svg", "ico", "woff", "woff2",
+              "ttf", "otf", "eot", "map", "webp", "avif", "bmp", "mp4", "webm", "mov",
+              "mp3", "wav", "ogg", "pdf", "zip", "gz"}
+
+
+def _path_ext(path: str) -> str:
+    last = (path or "").rsplit("/", 1)[-1]
+    return last.rsplit(".", 1)[-1].lower() if "." in last else ""
+
+
+def _host_allowed(cfg: dict, host: str) -> bool:
+    try:
+        from scope_check import check_target
+        return bool(check_target(cfg, host).get("allowed"))
+    except Exception:
+        return False
+
+
 def cmd_history(eng_dir: str, in_scope_only: bool = True) -> None:
     """Pull proxy history into <eng>/proxy-history.jsonl (the attack-surface feed).
-    Pagination is count/offset (page/number silently fails). Empty history is valid."""
+    Pagination is count/offset (page/number silently fails). Empty history is valid.
+
+    Smart filter (default; disable with --all): Burp's OWN target scope is often unset,
+    so we fetch everything and apply OUR authoritative scope.yaml instead — dropping
+    out-of-scope hosts (analytics/telemetry/third-party) and static-asset extensions."""
     mcp = SseMcp(); mcp.initialize()
     out_path = os.path.join(eng_dir, "proxy-history.jsonl")
-    count, offset, seen, written = 100, 0, set(), 0
+    cfg = None
+    if in_scope_only:
+        try:
+            from scope_check import load_scope
+            from engagement import scope_file
+            cfg = load_scope(str(scope_file()))
+            print("filter: scope.yaml + static-extension drop (use --all for raw history)")
+        except Exception as e:
+            print(f"scope filter unavailable ({e}); writing unfiltered history")
+    count, offset, seen, written, skipped = 100, 0, set(), 0, 0
     with open(out_path, "w") as f:
         while True:
             r = mcp.rpc("tools/call", {"name": "get_proxy_http_history",
-                "arguments": {"count": count, "offset": offset, "inScopeOnly": in_scope_only,
+                "arguments": {"count": count, "offset": offset, "inScopeOnly": False,
                               "newestFirst": False}}, id_=offset + 100, timeout=120)
             res = r.get("result", {})
             if res.get("isError"):
@@ -264,15 +322,24 @@ def cmd_history(eng_dir: str, in_scope_only: bool = True) -> None:
                     continue
                 seen.add(key)
                 e = normalize_history_entry(it)
-                if e:
-                    f.write(json.dumps(e) + "\n")
-                    written += 1
-                    new += 1
-            print(f"offset {offset}: {len(items)} entries ({new} new)")
+                if not e:
+                    continue
+                if cfg is not None:
+                    if not _host_allowed(cfg, e.get("host") or ""):
+                        skipped += 1
+                        continue
+                    if _path_ext(e.get("path") or "") in STATIC_EXT:
+                        skipped += 1
+                        continue
+                f.write(json.dumps(e) + "\n")
+                written += 1
+                new += 1
+            print(f"offset {offset}: {len(items)} entries ({new} kept)")
             if len(items) < count:
                 break
             offset += count
-    print(f"\nwritten: {written} entries -> {out_path}")
+    tail = f", {skipped} filtered (out-of-scope/static)" if cfg is not None else ""
+    print(f"\nwritten: {written} entries -> {out_path}{tail}")
     print("next: the attack loop reads this file as the attack surface.")
 
 
