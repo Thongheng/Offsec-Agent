@@ -7,9 +7,22 @@ Record a candidate as soon as you see it, then promote it only when verified:
 
 ```
 offsec evidence --title "..." --class ... --candidate --impact "..."       # candidate
+python3 -m offsec.verify.poc pocs/F-0001.poc.md --var HOST=...             # replay gate
 offsec evidence --title "..." --class ... --verified --poc pocs/F-0001.poc.md --impact "..."  # verified
 offsec shapes match --handle <h> --title "..." --class ...
 ```
+
+The checklist below is mandatory, and promotion to `verified: true` is blocked in
+the CLI until replay succeeds, an existing PoC bundle is supplied, or a human
+override reason is recorded:
+
+```
+offsec evidence --title "..." --verified --validator-ok --impact "..."
+offsec evidence --title "..." --verified --human-override "live triager reproduced from attached Burp project"
+```
+
+Without one of those validation paths, `offsec evidence --verified` is rejected
+and recorded as a candidate.
 
 ## PoC bundle (`pocs/<F-ID>.poc.md`)
 ```

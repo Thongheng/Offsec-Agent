@@ -26,6 +26,8 @@ offsec dependency --resolve "paid tier enabling sharing"
 - [ ] Seed >=1 object per crown-jewel type and exercise the lifecycle (create -> read as
       other -> update -> delete -> side effects). An empty collection is `observed`,
       never covered.
+- [ ] For authz features, run an optional role-observation pass before attacking:
+      owner/member/viewer/outsider allowed actions become the control matrix.
 
 Gate `provision -> hunt`: `offsec advance` passes only when **every** focus feature's
 probe is `enabled` and no dependency is unresolved. A focus feature that is `disabled`

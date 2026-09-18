@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from pathlib import Path
 
 from . import config, derive, events, machine
 from .gates import scope
@@ -101,11 +102,35 @@ def cmd_lead(a) -> int:
 
 @_targetless
 def cmd_evidence(a) -> int:
+    verified = bool(a.verified)
+    validator_reason = None
+    if verified:
+        poc_ok = False
+        if a.poc:
+            poc_path = Path(a.poc).expanduser()
+            poc_ok = poc_path.exists()
+            if not poc_ok and not poc_path.is_absolute():
+                poc_ok = (config.target_dir() / poc_path).exists()
+        validator_ok = bool(a.validator_ok)
+        override_ok = bool(a.human_override)
+        if not (poc_ok or validator_ok or override_ok):
+            print("BLOCKED: --verified requires an existing --poc bundle, "
+                  "--validator-ok, or --human-override with a reason. "
+                  "Recording candidate evidence instead.", file=sys.stderr)
+            verified = False
+        elif poc_ok:
+            validator_reason = "poc_bundle_exists"
+        elif validator_ok:
+            validator_reason = "validator_ok"
+        else:
+            validator_reason = "human_override"
+
     ev = events.append("evidence", title=a.title, **{"class": a.cls}, severity=a.severity,
-                       verified=bool(a.verified), impact=a.impact, poc=a.poc,
-                       shape_ref=a.shape_ref)
+                       verified=verified, impact=a.impact, poc=a.poc,
+                       shape_ref=a.shape_ref, validator=validator_reason,
+                       human_override=a.human_override)
     print(json.dumps(ev))
-    return 0
+    return 0 if verified == bool(a.verified) else 1
 
 
 @_targetless
@@ -411,6 +436,10 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--candidate", action="store_true")
     s.add_argument("--impact", default=None)
     s.add_argument("--poc", default=None)
+    s.add_argument("--validator-ok", action="store_true",
+                   help="assert that python -m offsec.verify.poc or an equivalent replay exited 0")
+    s.add_argument("--human-override", default=None,
+                   help="human-reviewed reason to mark verified without deterministic replay")
     s.add_argument("--shape-ref", dest="shape_ref", default=None)
     s.set_defaults(fn=cmd_evidence)
 

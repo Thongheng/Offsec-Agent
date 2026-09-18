@@ -13,7 +13,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from offsec import config, derive, events, machine  # noqa: E402
+from offsec import cli, config, derive, events, machine  # noqa: E402
 from offsec.gates import scope  # noqa: E402
 from offsec.yieldmodel import shapes  # noqa: E402
 from offsec.discover import seam  # noqa: E402
@@ -29,6 +29,7 @@ def check(label, cond):
 
 def setup(tmp: str):
     os.environ["OFFSEC_TARGET"] = tmp
+    (Path(tmp) / "pocs").mkdir(exist_ok=True)
     config.save_target(dict(config.DEFAULT_TARGET_YAML))
     (Path(tmp) / "scope.yaml").write_text(
         "engagement: t\nauthorization:\n  type: bug-bounty\n  reference: x\n  authorized_by: y\n"
@@ -97,6 +98,24 @@ def main() -> int:
                       "POST /x HTTP/1.1\nHost: a\n\n{}")
         check("seam flags client-only header", any("csrf" in f for f in d["seam_flags"]))
         check("seam flags missing role body field", any("role" in f for f in d["seam_flags"]))
+
+        print("verified evidence gate")
+        rc = cli.main(["evidence", "--title", "unreplayed", "--verified", "--impact", "x"])
+        last = events.tail(1)[0]
+        check("verified evidence without validator is rejected", rc == 1)
+        check("rejected verified evidence records as candidate", last["kind"] == "evidence"
+              and last["verified"] is False)
+        rc = cli.main(["evidence", "--title", "replayed", "--verified", "--validator-ok",
+                       "--impact", "x"])
+        last = events.tail(1)[0]
+        check("validator-ok allows verified evidence", rc == 0 and last["verified"] is True
+              and last["validator"] == "validator_ok")
+        (Path(tmp) / "pocs" / "F-0001.poc.md").write_text("---\nname: smoke\n---\n")
+        rc = cli.main(["evidence", "--title", "poc bundle", "--verified",
+                       "--poc", "pocs/F-0001.poc.md", "--impact", "x"])
+        last = events.tail(1)[0]
+        check("target-relative poc bundle allows verified evidence", rc == 0
+              and last["verified"] is True and last["validator"] == "poc_bundle_exists")
     finally:
         os.environ.pop("OFFSEC_TARGET", None)
         shutil.rmtree(tmp, ignore_errors=True)

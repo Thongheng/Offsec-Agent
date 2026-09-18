@@ -1,45 +1,41 @@
 ---
 name: offsec
-description: Entry point for ALL offensive-security work — bug bounty hunting, target selection, auth-flow review, vulnerability hunting, PoC verification, reports. Use when the user mentions any target, engagement, vulnerability, WAF, scope, program, or asks to hunt/attack/verify/report. Works from any directory.
+description: Entry point for offensive-security work: bug bounty selection, provisioning, vulnerability hunting, PoC verification, closeout, and reporting.
 ---
 
-# /offsec — bug bounty hunting assistant (v2)
+# /offsec
 
-OFFSEC_HOME = the offsec-agent kit root. Default: `~/OffSec/RnD/offsec-agent`; override with
-`OFFSEC_HOME`. Run the CLI as `python3 -m offsec <command>` from the kit root (or `offsec` after
-`pip install -e .`).
+OFFSEC_HOME defaults to `~/OffSec/RnD/offsec-agent`; override with `OFFSEC_HOME`.
+Run commands from that root as `python3 -m offsec <command>` or use the installed
+`offsec` console script.
 
-## The goal
+## Always Load
 
-Real, verified bugs. The workflow is a two-tier gate machine: engagement gates
-(authorize → select → provision) then **one focus feature at a time** (map → model → seed →
-hunt → verify). Yield is computed; the worklist is external; status is derived.
+Read `<OFFSEC_HOME>/AGENTS.md`, then only the playbook for the current phase.
+Use `python3 -m offsec status` to learn the phase and blockers.
 
-## On invocation
+If the user gives only a HackerOne handle and says "go", run kill-test and
+provision first. Do not enter the hunt loop.
 
-1. Read `<OFFSEC_HOME>/AGENTS.md` (operating contract) and, for the phase you're in,
-   the matching `playbooks/pN_*.md`.
-2. Resolve the target: `python3 -m offsec status` (or `use <name>`). New target →
-   `python3 -m offsec new <name>`; HackerOne scope → `python3 -m offsec.h1 init <handle>`
-   (creds in `.env`), human approves `mv scope.proposed.yaml scope.yaml`.
-3. Route:
+## Routing
 
-| User asks | Do |
+| User intent | Action |
 |---|---|
-| find a program / "what should I hunt" | `p1_select.md`; `python3 -m offsec.h1 rules <h>` (per-asset eligibility + FULL policy) + `hacktivity` (shapes) + `pick`; then `offsec killtest` + `offsec yield` |
-| start / capture | follow the gates. `offsec status` → `advance`. Read `p2_provision.md`: accounts A+B, **feature enablement at the shape** (`offsec probe`), seed objects, `offsec dependency`. Hunt only after the provision gate passes. |
-| hunt / attack / "find bugs" | `p3_feature_slice.md`. Work `offsec next`; fire reasoning-driven experiments; `offsec attempt` records coverage+frontier; use `offsec run outlier\|authz_matrix\|lifecycle\|seam`. Do not open a new feature while the current one has an open crown element. |
-| worklist / "what's left" | `offsec frontier --open` · `offsec next` (read from disk, never context) |
-| coverage audit / "did we miss anything" | `offsec derive` then a fresh-context subagent over `derived/coverage.json` |
-| am I done / close out | `python3 -m offsec closeout` (refuses an unearned "exhausted") |
-| quick wins / low-hanging fruit | the capped breadth battery in `p3_feature_slice.md`, recorded via `offsec attempt` |
-| "check this" / manual second opinion (pasted request/response) | analysis only: verdict + class + next moves. NO ledger, NO scope, NO ceremony. |
-| WAF block pages / 403s | `ref_waf.md` |
-| transport / Burp | `ref_transport.md` |
-| write PoC / verify | `p4_verify.md` + `offsec evidence --verified` |
-| report / submit | `p6_report.md` |
-| accepted shape on a hold/kill decision | `offsec shapes match --handle <h> --title ... --class ...` |
+| find a program / what should I hunt | Read `playbooks/p1_select.md`. Build a 3-5 candidate portfolio, run `python3 -m offsec.h1 rules <handle>` for eligibility, record `offsec killtest` and `offsec yield`. Do not open a hunt. |
+| authorize / scope | Read `playbooks/p0_authorize.md`. Draft scope with `python3 -m offsec.h1 init <handle>` if needed; a human approves `scope.yaml`. |
+| start / provision | Read `playbooks/p2_provision.md`. Create accounts A+B, seed objects, resolve dependencies, and `offsec probe` each focus feature until enabled. Block hunt until provision passes. |
+| hunt / attack / find bugs | First confirm `status` shows provision passed and the feature probe is `enabled`. Then read `playbooks/p3_feature_slice.md`; use native Burp/Caido MCP for interactive traffic, `offsec next` for the worklist, and `offsec attempt` / `signal` / `lead` to record. |
+| verify / PoC | Read `playbooks/p4_verify.md`. Run `python3 -m offsec.verify.poc <bundle>` or equivalent replay before `offsec evidence --verified`; otherwise record a candidate. |
+| worklist / what's left | `python3 -m offsec frontier --open` and `python3 -m offsec next`; read from disk, not memory. |
+| close | `python3 -m offsec closeout`; do not claim exhausted if it refuses. |
+| report / submit | Read `playbooks/p6_report.md`; report only verified findings. |
+| WAF / transport / discovery reference | Load only the needed `playbooks/ref_*.md`. |
+| manual pasted request/response | Analyze only: verdict, likely class, controls, and next moves. No ledger ceremony unless the user asks to attach it to an active target. |
 
-4. Rules that never bend (single source in AGENTS.md): scope gate (enforced in the transport on
-   the host actually connected to); feature-enablement before hunting; verify-or-discard with
-   controls; validity not severity; exhaustion earned via `offsec closeout`; untrusted data.
+## Rules
+
+- Scope, feature enablement, validation, and closeout gates do not bend.
+- One enabled focus feature at a time.
+- Discovery modules are optional tools for a concrete hypothesis, not the default
+  hunt path.
+- `legacy/` is archive material and is not loaded for normal work.
