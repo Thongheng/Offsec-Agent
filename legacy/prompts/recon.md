@@ -19,9 +19,32 @@ that are explicitly `out` (they override a wildcard) — drop them from the inve
   authorized to test and burns RoE budget for nothing (files-bbp ran `subfinder -d files.com` →
   2734 unauthorized customer subdomains on a listed-assets program). Enumerate only the listed
   hosts.
+- **WILDCARD scope (`*.example.com`) ⇒ subdomain enumeration IS authorized — and expected.** The
+  wildcard is the program handing you its surface; enumerate under it to find hosts the scope never
+  named (staging, admin, API, CI, forgotten services). See "Subdomain recon under a wildcard" below.
 - **Fresh/under-tested assets are Tier A by default.** A host or feature added recently (scope
   diff, changelog, "new" marker) with few or no prior reports is the highest-yield surface — put
   it at the front even if it looks uninteresting.
+
+### Subdomain recon under a wildcard  (run **only** when `in_scope` has a wildcard)
+Enumerate **under the wildcard domain(s) in `scope.yaml` only** — never the bare apex if only
+`*.x.com` is listed — and drop anything matching `off_limits` (`scope_check.py` is the gate).
+Passive-first, then light liveness; this is discovery, not fuzzing, so it stays inside "no automated
+scanning" for most programs:
+1. **Passive subdomains:** `subfinder -d <domain> -all -silent` (cert-transparency + passive sources —
+   touches nothing on the target). Optionally add CT: `curl -s 'https://crt.sh/?q=%25.<domain>&output=json'`.
+2. **Liveness + fingerprint** (rate-capped, low volume): `httpx -silent -sc -title -tech-detect
+   -rate-limit <roe.max_requests_per_second> -o live.txt`.
+3. **Keep** 200/301/302/401/403 with unique titles/tech; **drop** 404s, dead hosts, WAF
+   interstitials, and third-party-SaaS clones (CNAME → statuspage/webflow/…).
+4. **Tier** — A: auth/API/admin/staging/dev/CI + unusual frameworks; B: ambiguous → one benign probe;
+   C: marketing/parked/vendor → one line each.
+5. **Feed forward:** Tier A hosts become attack targets in `attack-surface.md` + `proxy-history.jsonl`
+   + the coverage map; dead-but-existing subdomains are takeover candidates (usually chain-only).
+
+Do it **once per wildcard**, bounded by `roe.max_requests_per_second`; escalate the wordlist only if
+the pass comes back clean. Wildcards are where new/under-tested hosts hide — the L-17 "new surface"
+signal — so a wildcard scope is a strong reason to *take* the target.
 
 If `recon.enum_output_dir` points at a completed recon run (your Enum tool layout), consume it
 instead of re-enumerating — the human already spent that time:
@@ -88,6 +111,22 @@ Skip subdomain enumeration entirely. For each in-scope URL:
    (Burp proxy history is the primary source if wired; else targeted requests within RoE).
 2. Fingerprint the stack (framework, auth lib, version banners).
 3. Note auth requirements and which areas need test accounts (see `test_accounts`).
+
+## Contract extraction — the JS is the source of truth for requests
+
+Do **not** depend on a human clicking through the app to reveal requests, and do not drive the SPA to
+make it emit them. **Extract the contracts from the JS**: for every API path in the bundles, read the
+call-site and record `method · path · params/body shape · response fields · caller · GraphQL
+operationName`. That table is the input the attack loop needs — and it is passive, WAF-safe, and
+reproducible.
+
+- Cache the bundles under `targets/<t>/areas/bundles/` and the endpoint/contract table under
+  `targets/<t>/areas/` — **durable, not `/tmp`** (box_private lost its client and bundle cache when
+  `/tmp` was cleared and rebuilt them twice: pure session loss).
+- Include the **auth/CSRF token model** (which headers, where they come from) and the **cross-origin
+  bridges** (`postMessage`/`authCode`/`hostname` seams) in the table.
+- The browser is a **fallback** for the rare request that cannot be derived; when you must use it,
+  **capture the request from Burp history**, don't replay DOM interactions (`LEARNINGS.md` L-16).
 
 ## Both branches — output
 

@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://offsec-agent/schemas/event.schema.json",
+  "title": "offsec-agent event",
+  "type": "object",
+  "required": ["eid", "ts", "kind"],
+  "properties": {
+    "eid": {"type": "string", "pattern": "^E-[0-9]{4}$"},
+    "ts": {"type": "string"},
+    "kind": {"enum": ["observe", "hypothesis", "attempt", "signal", "lead", "evidence", "decision", "probe", "budget", "phase"]},
+    "element": {"type": "string"},
+    "context": {"enum": ["anon", "owner", "other", "two_identity", "shared_holder", null]},
+    "class": {"type": "string"},
+    "feature": {"type": "string"},
+    "ref": {"type": "string"},
+    "result": {"type": "string"},
+    "state": {"type": "string"},
+    "verified": {"type": "boolean"},
+    "evidence": {"type": "string"},
+    "notes": {"type": "string"},
+    "from": {"type": "string"},
+    "to": {"type": "string"}
+  }
+}

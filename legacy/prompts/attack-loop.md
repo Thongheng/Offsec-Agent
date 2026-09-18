@@ -18,19 +18,28 @@ untrusted data) never bend; everything else is yours to override with a reason.
 2. **The ledger** — `log.jsonl` (what was already tested: don't re-burn dead ends),
    `findings.jsonl` (bugs only; live candidates belong here as `verified: false`),
    `coverage-map.jsonl` (per-endpoint state: `observed | unauth_tested | authed_tested |
-   needs_session_B | excluded`), and `leads.jsonl` (open anomalies/unresolved leads — see
-   "Leads backlog"). Schema: `state/log.example.jsonl`, `state/findings.example.jsonl`,
-   `state/coverage-map.example.jsonl`, `state/leads.example.jsonl`. The coverage map is
-   updated **at test time**, not just at baseline — it is the coverage claim (see L-8).
-3. **Transport** — the default is `tools/burp_mcp.py` (through Burp, so the human sees
-   every request and can take over in Repeater). Tool reference: `prompts/burp-mcp.md` —
-   required args, the Organizer/history tools, Collaborator for OOB, and the gotchas.
-   Read it if any Burp call errors or behaves unexpectedly. **The transport is a decision,
-   not a mandate**: the authoritative transport is whatever reaches the origin with impact
-   while staying visible. When a target is behind bot management (see `prompts/waf.md`
-   Step 0), Burp's TLS/HTTP fingerprint is exactly what gets challenged — switch to
-   `curl_cffi`/`poc_replay.py` for those hosts, keeping Burp as upstream proxy where
-   possible so traffic stays visible. Burp is the default, not a constraint.
+   needs_session_B | blocked | excluded`), `leads.jsonl` (open anomalies/unresolved leads — see
+   "Leads backlog"), and **`frontier.jsonl` — the worklist** (see "The iteration protocol").
+   Schema: `state/log.example.jsonl`, `state/findings.example.jsonl`,
+   `state/coverage-map.example.jsonl`, `state/leads.example.jsonl`, `state/frontier.example.jsonl`.
+   The coverage map is updated **at test time**, not just at baseline — it is the coverage claim
+   (see L-8). **Coverage is a matrix: attacker-context × class × feature** — an endpoint is one axis.
+   A row fired in only one cell (e.g. authed-other-user × BOLA-by-id) is **one cell, not coverage**:
+   keep the contexts explicit (anon · shared-link holder · authed other user · owner · two-identity)
+   and treat an `observed` row as a *named gap*. box_private "tested" 91 endpoints with a single
+   strategy — that was one cell, and it read as progress (`LEARNINGS.md` L-16).
+3. **Transport is a decision, not a ritual — pick by purpose.**
+   - **Burp** (`tools/burp_mcp.py`) — for *browser-originated* or *human-visible* traffic: the
+     surface feed (`history`), replays of captured requests, and anything you want the human to
+     watch or take over in Repeater. That is its job.
+   - **Script** (`tools/poc_replay.py`, `curl_cffi`) — for *handcrafted/unauth probes*, recon
+     sweeps, and any volume: one process, no MCP round-trip per request, and a TLS fingerprint
+     that isn't Burp's (Burp's stack is exactly what bot management challenges —
+     `prompts/waf.md` Step 0). `poc_replay.py` enforces the scope gate on every send.
+   **Do not route every probe through Burp "because the kit says so"** — it is slow and
+   fingerprintable, and it made a session send one-off recon requests through the MCP while a
+   script would have done it in one call. Use Burp when visibility/continuity matters; the script
+   when it doesn't. Reference: `prompts/burp-mcp.md`.
 4. **The scope** — `scope.yaml`. The scope gate is enforced in code on the host you actually
    connect to; respect `roe.notes` exclusions (e.g. some programs reject rate-limiting
    reports or ban scanners — know before attacking).
@@ -42,12 +51,19 @@ untrusted data) never bend; everything else is yours to override with a reason.
    must exist before "abnormal" means anything. Hunt feature/behavior-driven — the class list
    explains a deviation, it does not decide what to test next (see `LEARNINGS.md` L-7).
 
-   **Use the product like a user, then deviate.** The intended behavior that matters is what a
-   human sees in the UI, not what a GET returns. Before hunting a feature, actually *use* it the
-   normal way through the browser (create, share, invite, upload, configure) and note where the
-   UI and the API disagree, and which UI-reachable states the API/direct requests skip. Most
-   accepted logic bugs live at that seam (files-bbp disclosed "$600 access control on files
-   shared via …" is exactly this). A feature you have only GET-ed is not baselined.
+   **Use the product like a user — but get the contract from the code, not the clicks.** The
+   intended behavior that matters is what a human sees in the UI, not what a GET returns. But the
+   cheapest *reliable* way to obtain a feature's request contract (method, path, body shape, params,
+   headers, GraphQL `operationName`) is the **JS bundles** — read the call-sites
+   (`prompts/recon.md`), then **synthesize** the request. Do **not** drive the SPA DOM to make the
+   app emit it. Use a browser only when a request genuinely cannot be derived, and then **capture
+   the real request from Burp history** rather than replaying UI interactions. (box_private burned a
+   large share of a session fighting the New-menu, consent buttons and hidden upload inputs while the
+   contracts sat in the bundles — `LEARNINGS.md` L-16.) Still *use* the product to learn intent and
+   to find the **UI-vs-API seam** — the seam is where accepted logic bugs live (files-bbp "$600 access
+   control on files shared via …") — but reach it by *comparing* the UI's captured request to your
+   synthesized one, not by clicking through the flow. A feature you have only GET-ed is not baselined;
+   a feature you have only clicked is not contracted.
 
    **Own one feature, don't sweep many.** A cleared-class verdict is cheap only when the class is
    genuinely dead; a *feature* fully understood yields chains a sweep never will. Prefer depth on
@@ -78,6 +94,13 @@ untrusted data) never bend; everything else is yours to override with a reason.
   artifact `environment.md`, a *hard gate*. Do not run this loop until it passes or a blocker is
   named and scope is explicitly downgraded. If the loop keeps hitting `needs_session_B` or empty
   collections, the fix is Stage 2, not more class probes (see `LEARNINGS.md` L-8).
+- **A Stage-2 blocker on *authenticated* access does NOT block the *unauthenticated* surface.** Start
+  **black-box immediately, in parallel with provisioning** — do not idle waiting for accounts. The
+  anonymous surface is always available: public pages, the reviewer/guest/reset/login flows, shared
+  links, unauth API endpoints, cache/CDN behaviour, and injection in publicly reachable params.
+  Only the context-dependent cells (`attacker B`, `owner`, `two-identity`) wait on Stage 2; the
+  `anon` cell is testable now. Needing the human to say "go black-box" is a methodology failure —
+  the loop's default is to keep testing the surface it can already reach.
 
 ## Active discovery (surface beyond what was browsed)
 
@@ -109,11 +132,54 @@ Order is a default, not a rule — follow whatever the target suggests:
 
 Newly discovered surface joins proxy-history.jsonl as attack targets.
 
+## The iteration protocol — the worklist IS the memory
+
+Planning state lives in `frontier.jsonl`, **not** in the conversation. Long sessions compact, and
+anything held only in context (the plan, the list of what's left) is the first thing lost. So the
+loop never decides "what's next" from memory — it reads the file. Each iteration:
+
+1. **Read the frontier from disk** → `python3 tools/frontier.py next --mark`. The file decides the
+   next action. This is what makes compaction harmless: even if the whole conversation is
+   summarized away, step 1 re-derives the work from the file.
+2. **Take the top OPEN item** — an `(element × hypothesis)` pair. If none, the frontier is triaged
+   (see *saturation* below).
+3. **Test that hypothesis on that element.** Cheap budget by default; a `lead` item has a signal and
+   gets the depth budget (see "Signal-gated depth" below).
+4. **Interpret the response — mandatory.** State what the response *shows* and what it *implies*
+   for the next test. A fired request with no interpretation is an **invalid step**. (This is the
+   anti-tunnel-vision rule: the transport tool is not the work — the reasoning is.)
+5. **Record the outcome**: `python3 tools/frontier.py set <id> --state <state>` **and** write the
+   element's `coverage-map.jsonl` row in the same step. Terminal states: `tested_clean`, `verified`,
+   `excluded`, `needs_B`, `blocked`, `duplicate`. A signal → `frontier.py signal <id> "..."`.
+6. **Append what the result derived.** A new endpoint, param, redirect, error-leaked path, or
+   anomaly becomes a **new** frontier item with `--derived-from <id>`. Nothing observed is allowed
+   to simply disappear.
+7. **Repeat.**
+
+**Saturation is the stop condition.** You are not done when the initial surface list is exhausted —
+you are done when a full pass produces **no new items** and no OPEN items remain. A static to-do
+list misses everything discovered later; the frontier is **open-world** and grows from findings and
+anomalies. Bound its growth with priority + budget, never by ignoring discoveries.
+
+**Signal-gated depth.** Every element gets one cheap bounded probe. No signal → terminal
+(`tested_clean`), close and move on — never dig without a signal. A signal (differential,
+reflection, odd status/body/timing/error) → promote to `lead` and spend the depth budget there.
+Depth is *earned by evidence*.
+
+**Hardening verdict — stop firing a saturated family.** When a full cheap pass over a **class
+family** (e.g. IDOR-by-id across the whole object API) yields **zero signals** — only uniform
+`not-vulnerable`/denied — that family is *saturated*. Fire no more of it. Either escalate to the
+**highest-complexity reachable cell** (multi-step / state-machine / race / two-identity role change /
+the UI-vs-API seam) or, if every remaining cell is `blocked` or feature-gated, **abandon with a named
+reason**. "Many negatives" is *one* result, not coverage: box_private produced 23 consecutive
+negatives and no finding, and the mistake was continuing to sweep a hardened surface instead of
+declaring the ceiling. Say the ceiling out loud in the session-end summary (`LEARNINGS.md` L-16).
+
 ## The loop
 
-**1. Pick an untested surface element.** The default priority order below is a set of
-   high-yield shapes — a starting point, not a rule. Reorder when the surface says otherwise
-   and say why. Skip elements the ledger already cleared.
+**1. Pop the top frontier item** (protocol above: `frontier.py next --mark`). The high-yield shapes
+   below are how new items are **seeded and prioritized** — a starting point, not a rule. Reorder
+   when the surface says otherwise and say why. Never re-queue items the ledger already cleared.
 
    **Breadth first, then depth.** Before deep feature work, run the **low-hanging-fruit battery**
    (`prompts/low-hanging-fruit.md`) — reflected/stored XSS, HTML injection, open redirect,
@@ -171,9 +237,10 @@ confusion, kid injection); CORS origin reflection with credentials; web cache
 poisoning/deception; subdomain takeover; cloud/IMDS via SSRF; WebSocket message-level
 authz; secrets/source in JS.
 
-Transport: Burp by default; `poc_replay.py` / `curl_cffi` when bot management blocks Burp
-(see `prompts/waf.md`). Safe deterministic probes fire directly; anything destructive,
-high-volume (>20 requests), or affecting other users: propose first and wait for the human.
+Transport: pick by purpose (see "What you need" #3) — Burp for browser-originated/human-visible
+traffic, `poc_replay.py` / `curl_cffi` for handcrafted probes, recon sweeps and volume. Safe
+deterministic probes fire directly; anything destructive, high-volume (>20 requests), or affecting
+other users: propose first and wait for the human.
 
 **3. Verify or discard.** Verification is about **demonstrating the actual security
 boundary — not merely that a request succeeded** — reproducibly, with the controls that make
@@ -202,8 +269,9 @@ a real, reachable, in-scope behavior is dropped are the excluded list and "worki
 (with the docs to back it) — not severity.
 
 **4. Pivot on what you see.** New param, new flow, weird response → that's the next target.
-   Anomalies (unexplained behavior) get logged immediately and become follow-up attempts.
-   If the developers got one thing wrong, check its siblings before moving on.
+   Anomalies (unexplained behavior) get logged immediately and **appended to the frontier**
+   (`frontier.py add --derived-from <id>`), so they are queued work rather than a note that gets
+   lost. If the developers got one thing wrong, check its siblings before moving on.
 
    **Sibling propagation (do not skip).** A class cleared on one endpoint is NOT cleared on its
    siblings — filters and authz checks are frequently implemented per-endpoint, and the one that
@@ -224,7 +292,8 @@ a real, reachable, in-scope behavior is dropped are the excluded list and "worki
    them, chain them, or kill them with a stated reason (schema: `state/leads.example.jsonl`).
    An anomaly seen once and abandoned is how a real bug is lost (see `LEARNINGS.md` L-8).
 
-**5. Repeat** until the surface is covered or the session ends.
+**5. Repeat** until the frontier reaches **saturation** (a full pass adds no new items and none
+are OPEN) or the session budget ends.
 
 ## Hard gates (never bend)
 
@@ -254,15 +323,19 @@ closing, reconcile **both** ledgers **and run the enforcement tool**:
 - `coverage-map.jsonl`: every crown-jewel endpoint must be `authed_tested`, `needs_session_B`,
   `blocked`, or `excluded` — an `observed` crown-jewel endpoint is an explicit, named gap,
   never left implicit.
+- `frontier.jsonl`: zero OPEN items (`new` / `in_progress` / `lead`) — each is tested, promoted,
+  or killed with a reason (`tools/frontier.py`; do not hand-edit). Reaching saturation (a full
+  pass added nothing new) is the honest stop condition.
 - `leads.jsonl`: zero `open` leads — each is worked, or killed with a reason (use
   `tools/leads.py`; do not hand-edit).
-- **`python3 tools/closeout.py`** — it computes the verdict from the two ledgers and **refuses**
+- **`python3 tools/closeout.py`** — it computes the verdict from all three ledgers and **refuses**
   an unearned "exhausted" (exit 1, with the named gaps). A no-finding close is only recorded
   when it exits 0.
 
 **"Exhausted" / "no finding" is a coverage claim, and it must be earned from ledger state, not
 from the log.** It is only truthful when every crown-jewel row is `authed_tested` /
-`needs_session_B` / `excluded` AND no leads are `open`. If either ledger is unsatisfied, the
-honest close is "N crown-jewel endpoints untested, M leads open, blocked by <reason>" — not
-"exhausted." A session that quietly closes with a full `observed` column and calls it coverage
-is the failure this rule exists to prevent (see `LEARNINGS.md` L-8).
+`needs_session_B` / `excluded`, **the frontier has no OPEN items**, AND no leads are `open`. If any
+ledger is unsatisfied, the honest close is "N crown-jewel endpoints untested, M frontier items open,
+K leads open, blocked by <reason>" — not "exhausted." A session that quietly closes with a full
+`observed` column (or an untouched frontier) and calls it coverage is the failure this rule exists
+to prevent (see `LEARNINGS.md` L-8).

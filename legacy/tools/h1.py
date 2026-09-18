@@ -12,7 +12,7 @@ Usage:
   python3 tools/h1.py rules <handle>               # scope eligibility + FULL policy (per-class gate)
   python3 tools/h1.py init <handle>                # scope → targets/<current>/scope.proposed.yaml
   python3 tools/h1.py hacktivity "team_handle:\"acme\""   # disclosed reports + payouts
-  python3 tools/h1.py pick h1 h2 h3                # compare candidates (reliable signals)
+  python3 tools/h1.py pick h1 h2 h3                # candidate compare: gates + disclosed SHAPES
   python3 tools/h1.py reports                      # your reports
   python3 tools/h1.py earnings                     # your bounty history
 
@@ -267,36 +267,176 @@ def cmd_hacktivity(query: str) -> None:
     print(f"\n{len(rows)} disclosed report(s) for query: {query}")
 
 
-def cmd_pick(handles: list[str]) -> None:
-    """Decision support: reliable signals + paid-disclosure counts per candidate.
+import re
 
-    Read alongside prompts/targeting.md. The disclosed-SHAPE lines are the important output —
-    they are the program's accepted taste; replicate a shape on its feature/siblings. Payout
-    columns are CONTEXT ONLY: severity/payout never filter what you test, and no column here
-    tells you whether you can REACH the bug-bearing surface (Gate 1) — that is an environment
-    question, settle it before hunting.
-    """
+# Excluded-class detectors (policy sometimes names them in prose). Each label is
+# counted once. This is INFORMATIONAL — a secondary signal, not the selection driver:
+# exclusion lists are often boilerplate (headers, DoS, SPF) you wouldn't report anyway,
+# and a real boundary-crossing bug can still be valid via a chain or a class the list
+# doesn't cover. The key gate remains REACHABILITY (can you reach the bug-bearing
+# surface) — see prompts/targeting.md.
+EXCL_PATTERNS = [
+    ("self-xss",         r"self[\s-]?xss"),
+    ("open-redirect",    r"open[\s-]?redirect"),
+    ("headers/cookies",  r"(missing|security)\s+header|http\s+security\s+header|cookie\s+flag|httponly|secure\s+attribute"),
+    ("rate-limit",       r"rate[\s-]?limit"),
+    ("dos",              r"denial[\s-]of[\s-]service|\bdos\b"),
+    ("email-auth",       r"\bspf\b|\bdkim\b|\bdmarc\b|email\s+spoof"),
+    ("clickjacking",     r"clickjack"),
+    ("brute-force",      r"brute[\s-]?force|password\s+spray|credential\s+stuff"),
+    ("enumeration",      r"user(name)?\s+enumeration|account\s+enumeration"),
+    ("automation",       r"automated\s+scan|\bscanner\b|\bscanners\b"),
+    ("logout-csrf",      r"logout\s+csrf|csrf\s+on\s+logout"),
+    ("tls/ssl",          r"\bsslv\d|\btls\b|poodle|weak\s+cipher"),
+    ("version-disclosure", r"version\s+disclosure|software\s+version|banner\s+disclosure"),
+    ("password-policy",  r"password\s+polic"),
+    ("csv-injection",    r"csv\s+injection"),
+    ("tabnabbing",       r"tabnabbing"),
+    ("sri",              r"subresource\s+integrity|\bsri\b"),
+    ("hardening",        r"best\s+practice|hardening|informational"),
+]
+
+
+def _months_ago(iso: str | None) -> float | None:
+    if not iso:
+        return None
+    import datetime as _dt
+    try:
+        t = _dt.datetime.fromisoformat(iso.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    now = _dt.datetime.now(_dt.timezone.utc)
+    return round((now - t).days / 30.44, 1)
+
+
+def _program_signals(handle: str) -> dict:
+    """Gate-oriented signals: reachability (web?), findability (freshness/crowd),
+    landmines (excluded classes), scope shape. Payout is context only."""
+    s: dict = {"handle": handle, "error": None}
+    try:
+        a = get(f"/hackers/programs/{handle}").get("attributes", {})
+    except SystemExit as e:
+        s["error"] = str(e)
+        return s
+
+    s["bounty"] = bool(a.get("offers_bounties"))
+    s["state"] = a.get("submission_state")
+    s["open_scope"] = bool(a.get("open_scope"))
+    s["triage"] = bool(a.get("triage_active"))
+    s["age_mo"] = _months_ago(a.get("started_accepting_at"))
+    policy = (a.get("policy") or "").lower()
+    s["excl_hits"] = [label for label, pat in EXCL_PATTERNS if re.search(pat, policy)]
+
+    # scope shape + asset freshness
+    try:
+        rows = [r.get("attributes", {}) for r in
+                get(f"/hackers/programs/{handle}/structured_scopes").get("data", [])]
+    except SystemExit:
+        rows = []
+    s["assets"] = len(rows)
+    s["eligible_sub"] = sum(1 for r in rows if r.get("eligible_for_submission"))
+    s["eligible_bounty"] = sum(1 for r in rows
+                              if r.get("eligible_for_bounty") and r.get("eligible_for_submission"))
+    s["eligible"] = s["eligible_bounty"]  # backwards-compatible alias
+    s["wildcards"] = sum(1 for r in rows if r.get("asset_type") == "WILDCARD")
+    web_types = {"URL", "WILDCARD", "DOMAIN"}
+    s["web"] = sum(1 for r in rows if r.get("asset_type") in web_types)
+    s["mobile_only"] = bool(rows) and not s["web"]
+    newest = max((r.get("created_at") for r in rows if r.get("created_at")), default=None)
+    s["newest_asset_mo"] = _months_ago(newest)
+
+    # disclosed SHAPES (real titles) — the program's accepted taste. The COUNT is
+    # policy-dependent and NOT a ranking signal; the titles are the useful part.
     from urllib.parse import quote
-    print(f"{'handle':16s} {'bounty':6s} {'fast$':5s} {'GSSH':4s} {'triage':6s} {'paid':>5s} {'disc':>5s} {'top payouts'}")
+    try:
+        dis = get("/hackers/hacktivity",
+                  f"queryString={quote('team_handle:\"' + handle + '\" AND disclosed:true')}"
+                  "&page[size]=100").get("data", [])
+        s["disclosed"] = len(dis)
+        s["disclosed_capped"] = len(dis) >= 50
+        s["shapes"] = [r["attributes"].get("title") or "" for r in dis][:4]
+    except SystemExit:
+        s["disclosed"], s["disclosed_capped"], s["shapes"] = 0, False, []
+    return s
+
+
+def _yield_hint(s: dict) -> str:
+    """Two product/scope facts for Gate 3 (NOT a score): codebase maturity and surface freshness.
+
+    Deliberately EXCLUDES policy metrics (disclosed counts, exclusion lists, payout) — those do
+    not predict yield (L-15/L-17). The two axes combine; the reader decides:
+      young  + new -> fresh, unhardened product: BEST (low attention, new code).
+      mature + new -> new surface on a hardened codebase: good target, but HIGH attention — needs
+                      an edge or depth (box_private: age 83mo, newest asset 0.5mo, still the
+                      hardest pick).
+      mature + none-> picked over, no new surface: REJECT unless you have an edge.
+    A hint to confirm in recon, never a ranking.
+    """
+    age, fresh = s.get("age_mo"), s.get("newest_asset_mo")
+    m = ("young" if (age is not None and age <= 18)
+         else "mature" if (age is not None and age >= 60)
+         else "mid" if age is not None else "?")
+    n = "new" if (fresh is not None and fresh <= 6) else ("-" if fresh is not None else "?")
+    return f"maturity:{m}, new-surface:{n}"
+
+
+def _state(s: dict) -> str:
+    """Factual eligibility state — NOT a cross-program score.
+
+    Ranking programs on policy-derived metrics (disclosure counts, exclusion lists,
+    payout) is invalid: those describe the program's POLICY, not the opportunity. curl
+    discloses everything, a fintech discloses nothing — same field, no ranking. Choose
+    on (1) REACHABILITY, verified in Stage 2 by actually reaching the product, and
+    (2) whether the product's shape matches classes you can test. This function only
+    reports whether the asset is submittable/hard at all.
+    """
+    if s.get("error"):
+        return "err"
+    if s["assets"] == 0:
+        return "scope?read-policy"     # unstructured scope — read the policy text
+    if s.get("eligible_sub", 0) == 0:
+        return "skip(no-submit)"       # nothing submittable
+    if s["mobile_only"]:
+        return "hard(mobile)"
+    return "candidate"
+
+
+def cmd_pick(handles: list[str]) -> None:
+    """Candidate FACTS for a target (see prompts/targeting.md).
+
+    There is no valid cross-program ranking from the API: payout, disclosed-report
+    counts and excluded-class lists are all POLICY, not opportunity. This prints the
+    facts (scope shape, submittability, product asset types/recency, policy notes) and
+    the disclosed SHAPES (titles = the program's accepted taste). The decision is
+    REACHABILITY (Stage 2: can you get at the bug-bearing surface?) + whether the
+    product's shape matches classes you can test.
+
+    NOTE: disclosed count is policy-dependent (some programs never disclose); paid=0 is
+    NOT evidence of no bugs. Neither ranks a program.
+    """
     for h in handles:
-        a = get(f"/hackers/programs/{h}").get("attributes", {})
-        try:
-            d = get("/hackers/hacktivity", f"queryString={urllib.parse.quote(f'team_handle:\"{h}\" AND total_awarded_amount:>0')}&page[size]=100")
-            paid = d.get("data", [])
-            amts = sorted([r["attributes"].get("total_awarded_amount") or 0 for r in paid], reverse=True)
-        except SystemExit:
-            paid, amts = [], []
-        try:
-            alld = get("/hackers/hacktivity", f"queryString={urllib.parse.quote(f'team_handle:\"{h}\"')}&page[size]=100")
-            titles = [(r["attributes"].get("title") or "").strip() for r in alld.get("data", [])]
-        except SystemExit:
-            titles = []
-        print(f"{h:16s} {str(a.get('offers_bounties')):6s} {str(a.get('fast_payments')):5s} "
-              f"{str(a.get('gold_standard_safe_harbor')):4s} {str(a.get('triage_active')):6s} "
-              f"{len(amts):>5d} {len(titles):>5d} {amts[:3]}")
-        # disclosed SHAPES (accepted taste) — read these before choosing a focus feature
-        for t in titles[:3]:
-            print(f"{'':16s}   ↳ {t[:96]}")
+        s = _program_signals(h)
+        if s.get("error"):
+            print(f"{h:16s} ERROR {s['error'][:60]}")
+            continue
+        fresh = f"{s['newest_asset_mo']}mo" if s.get("newest_asset_mo") is not None else "-"
+        age = f"{s['age_mo']}mo" if s.get("age_mo") is not None else "-"
+        print(f"{h:16s} {'bounty' if s['bounty'] else 'VDP   ':6s} "
+              f"assets {s['eligible_sub']}sub/{s['eligible_bounty']}bounty of {s['assets']}, "
+              f"{s['wildcards']} wc, web:{'Y' if s['web'] else 'N'} | "
+              f"age {age}, newest-asset {fresh} | {_yield_hint(s)} | {_state(s)}")
+        if s.get("excl_hits"):
+            print(f"{'':16s}   policy notes (chain-or-kill; program policy, not a ranking signal): "
+                  f"{', '.join(s['excl_hits'])}")
+        for t in s.get("shapes", []):
+            if t:
+                print(f"{'':16s}   accepted-shape ↳ {t[:92]}")
+    print("\nNo valid API ranking: payout/disclosed-count/exclusions = program POLICY. "
+          "Decide on REACHABILITY (Stage 2) + product shape + Gate 3 YIELD. The hint axes combine: "
+          "young + new-surface = fresh, unhardened product (best); mature + new-surface = new code on "
+          "a hardened codebase (good surface but HIGH attention -> needs an edge/depth); "
+          "mature + no new surface = REJECT unless you have an edge. "
+          "A product fact to confirm in recon, never a score.")
 
 
 def cmd_reports() -> None:

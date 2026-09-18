@@ -3,6 +3,166 @@
 Lessons from real engagements that change how the kit works. Entries here are promoted
 into `prompts/*.md` and `AGENTS.md` as they're validated. Newest first.
 
+## L-17 (2026-09-17, selection post-mortem) — selection was **yield-blind**: "reachable + shape match" picks hardened targets as readily as fertile ones
+
+**What happened.** Three engagements (files-bbp, moneybird, box_private) → **zero findings**. The
+selection logic (`prompts/targeting.md` gates + `h1.py pick`) filters on **reachability** (Gate 1) and
+**product-shape match** (Gate 2), and **deliberately excludes policy metrics** (L-15). The error:
+L-15 correctly removed *disclosed counts / exclusions / payout* as ranking signals, but the logic then
+substituted **nothing** — so it has **no model of where an unfound bug plausibly still is**. It cannot
+tell Box (mature, household-name, heavily tested, tier-gated) from a young, sprawling product nobody
+has looked at. All three picks were "bountied web apps that accept authz bugs" — the **hardest cohort**
+— and we chose them because *reachable* reads like *fertile*. The kit even said so out loud: Gate 3
+("your edge") was marked **optional**, and freshness was declared "not a gate."
+
+**Why that is a structural failure, not bad luck.** On a mature program, with generic technique and no
+fresh surface, expected yield ≈ 0 — the observed result. Yield does not come from reachability; it
+comes from **fresh/under-tested surface, low attention, bug density, or an edge**. None were gates.
+
+**Rule (now implemented):**
+1. **Gate 3 is a real gate — Yield / edge.** Inputs are *product/competition* facts, never policy:
+   **fresh surface** (recent assets/features, fast-shipping team — `newest-asset`), **bug density**
+   (young/small > famous/hardened), **attention** (niche > household-name), and **edge** (a skill,
+   integration, private access, or unusual reachable surface).
+2. **No edge + mature product + no fresh surface ⇒ REJECT** (or commit to *depth-only* with a stated
+   reason). "No edge, so try harder on the same surface" is how sessions die.
+3. **Probe before you commit — portfolio, not single-shot.** Run a **≤1-hour kill test** on 3–5
+   candidates: can we sign up, and can we reach **one accepted-shape feature on a usable tier**?
+   Commit to the candidate showing fresh surface, an edge, or a first signal — not the most reachable
+   one. (box_private discovered its tier-gating *after* committing a full engagement; the kill test
+   catches that in an hour.)
+4. **The lifecycle window decides *whether*, not just *how*.** Launch → speed; **mature/crowded with no
+   time/edge → REJECT**; neglected-but-shipping → be first on new features.
+5. **Boundary — do not over-correct.** This is not a licence to rank on policy: disclosed counts,
+   exclusion lists and payout stay **facts, never scores** (L-15). Freshness, maturity, attention and
+   edge are *product* facts and are legitimate yield inputs.
+   **Corollary (observed live, box_private → ripio).** Advertised/leaked **payout must not appear in
+   the pick rationale at all** — a big number buys attention and pulls you toward mature, crowded
+   programs. When a program headlines a large bounty, treat the number as a *suspicion of crowding*,
+   not as a reason to pick it. (A pick motivated by reachability/shape/yield stands on its own; if a
+   pick only makes sense when you mention the money, it is the wrong pick.)
+6. **Validate the model.** Track pick → outcome in `LEARNINGS.md`. If two consecutive picks were
+   "reachable but matured, no edge", the heuristic is wrong — not the effort.
+
+## L-16 (2026-09-17, box_private post-mortem) — we had accounts, but not the *features*; coverage is attacker-context × class × feature, not endpoint count
+
+**What happened (box_private / Box BB, free personal tier).** 12 sessions, two live identities,
+~44 log entries, **0 findings**. The ledger says it plainly: **29 tests → 23 `not-vulnerable`,
+4 `blocked`, 2 benign `worked`; 39 coverage rows (19 `observed` — never fired, 17 `authed_tested`),
+and 91 endpoints inventoried.** Stage 2 "passed" because we could log in — but the *bug-bearing
+features were off*:
+
+- The program's headline focus is **collaboration-permission bugs**; on a personal account
+  `invite-collaborators` returns `200 {"invitedEmails":[]}` and **creates nothing** (A's
+  `pending-invites` stays empty) — the whole collaboration-role matrix is unreachable.
+- **Password-protected shared links** are feature-disabled (`Password cannot be saved … disabled`),
+  a paid-tier impact ⇒ policy-excluded.
+- Live config: `shield:false`, `chatbot:false`, `fileRequestEnabled:false`, `formsEnabled:false`,
+  `classification:false`, `metadata:false`, `sharedWithMe:false`; **Relay** routes to `/404`;
+  dev-console **OAuth apps and uploads** were only unlocked ~80% into the session.
+- So the surfaces where Box's disclosed corpus lives (Box AI, Shield, Governance, Relay, Forms,
+  enterprise collaboration) were **disabled**, and we spent the session proving the *reachable*
+  surface (internal `app-api`, documented `api.box.com`, shared links, Canvas, Notes) is hardened —
+  ~23 consecutive negatives.
+
+**Three structural mistakes, none of them "not trying hard enough":**
+1. **Stage 2 verified *access*, not *feature enablement*.** "Can we log in / call the API?" passed;
+   "is the feature the accepted bugs live in *enabled*?" was never a gate. That is the real
+   reachability question (Gate 1), and we answered it *late*, after burning the budget.
+2. **We counted endpoints, not cells.** 91 endpoints swept with *one* strategy (authed other-user
+   BOLA-by-id) is **one cell**, not 91 tests. `19 observed / 17 tested` hid the truth: whole
+   context×class×feature cells (anon × URL-fetch × weblink; two-identity × role-change × collab)
+   were never touched, and the class mix was skewed (`authz` 11 / `crown-jewel` 14 of 39).
+3. **The agent fought the UI instead of reading the code.** A large fraction of the session went to
+   browser plumbing (SPA New-menu, consent buttons, hidden upload input, cookie jars, CSRF
+   double-submit, `Request-Token`) — while the exact request contracts (method, path, body, params,
+   headers, `operationName`) were sitting in the JS bundles the whole time. We derived them
+   eventually; we should have started there.
+
+**Rule (now implemented):**
+1. **Stage 2 gate = a FEATURE-ENABLEMENT map, not a login.** For every accepted class / focus
+   feature, name the *product feature* it lives in and record **enabled / disabled / gated-by-tier**,
+   from the live app config + a real call. If the **headline focus is gated**, do not sweep the
+   rest and call it progress: **explicitly downgrade scope with a stated budget, or abandon** — a
+   target whose bug-bearing surface you cannot reach is an abandoned target, not a session
+   (`environment.md`, `prompts/environment.md`).
+2. **Unlock capabilities before sweeping — order Stage 2 as reach, then hunt.** Identities →
+   **API tokens / developer app** (free where the console is reachable from the account) →
+   **upload/objects** → *then* test. In box_private the dev app, OAuth tokens and the upload path
+   came at the end; they should have been the first hour.
+3. **Coverage is attacker-context × class × feature.** An endpoint list is recon; a cell counts only
+   when *exercised*. Track the matrix explicitly (anon, shared-link holder, authed other user,
+   owner, two-identity); an `observed` row is a **named gap**, never "done". Treat a run of
+   same-class negatives as *one* result, not many (`prompts/attack-loop.md`).
+4. **Derive requests from the JS call-sites; treat the browser as a fallback.** Bundles give the
+   contract (method, path, body shape, params, headers, GraphQL `operationName`); synthesize the
+   request instead of clicking the SPA. When a browser is genuinely required, **capture the request
+   from Burp history** rather than replaying DOM interactions.
+5. **Hardening verdict — stop firing a saturated family.** When a full cheap pass over a class
+   family yields **zero signals**, do not fire more of it: either escalate to the highest-complexity
+   *reachable* cell, or abandon with a named reason. "Many negatives" ≠ "covered".
+6. **Durable tooling from hour one.** The engagement's API client + cached bundles live under
+   `targets/<t>/areas/` (box_private rebuilt its client twice after `/tmp` was cleared; that thrash
+   is pure loss). `__pycache__` and scratch stay out of the ledger.
+7. **When hacktivity titles are hidden, derive accepted shapes from the program's own focus areas
+   ∩ the product feature set, then intersect with the *enabled* feature set.** That intersection is
+   the huntable surface and its size is the honest ceiling; state it in `plan.md` before hunting
+   (`prompts/targeting.md`).
+
+## L-15 (2026-09-17) — program-policy metrics are NOT targeting signals; don't rank programs from the API
+
+**What happened:** the program picker ranked/flagged candidates on metrics that are all
+**program-policy-dependent**, not opportunity-dependent:
+- **Disclosed-report count** ("crowded"/"quiet") measures a program's *disclosure policy*, not
+  competition. curl/Nextcloud disclose everything by culture; a fintech can disclose nothing while
+  paying constantly. Confounded by program age and the 50-per-page API cap.
+- **Excluded-class list** is the program's policy; Vimeo (12 exclusions) pays well, Scopely (5)
+  yields little — count doesn't track opportunity. It is a *strategy modifier* (if the cheap
+  classes are excluded, the target demands depth), never a ranking.
+- **Payout / paid-disclosure count** is private for many programs (`paid=0` ≠ no bugs).
+- Even **asset `created_at` freshness** partly reflects scope-data entry, not the product.
+
+So a target cannot be *ranked* from the API. What remains valid is: (1) **reachability** — verified
+in Stage 2 by actually reaching the bug-bearing surface, and (2) **product shape** — whether the
+product's nature puts testable classes in reach (multi-tenant → authz, URL fetchers → SSRF,
+upload/parsers → file bugs, auth/SSO → ATO). Both are about the *product*, not the paperwork.
+
+**Rule (now in `tools/h1.py` + `prompts/targeting.md`):**
+1. `h1.py pick` prints **facts** (scope shape, submittability, asset types/recency, policy notes)
+   and the disclosed **shapes** — no "crowded/quiet/fresh" verdict, no exclusion score.
+2. Gate 2 is **product-shape match**, not a policy-metric ranking. Disclosed counts, exclusions,
+   and payout are facts to read, never a score.
+3. The selection decision is **reachability (Gate 1) + product shape (Gate 2)**; exclusions drive
+   *strategy* (breadth vs depth), not choice.
+
+## L-14 (2026-09-17, methodology synthesis) — externalize the worklist; make a miss a computed, blocking condition; test with signal-gated depth
+
+**What happened:** the remaining structural gap was that "what's left to test" lived in the
+**conversation** — a lossy, bounded channel. Long-horizon agents do not carry a plan as persistent
+state; a plan written early is evicted first, and the agent fixates on the latest tool output.
+files-bbp is the case: coverage silently rotted to 114 `observed` / 0 `authed_tested` while the
+session believed it was finished. The fix is not "try harder" — it is to move planning state out of
+the model and make missing surface a *computed, blocking* condition.
+
+**Rule (now implemented):**
+1. **The worklist is external** — `frontier.jsonl` (`tools/frontier.py`); item = element ×
+   hypothesis. The loop reads `frontier.py next` **from disk each iteration** and never decides
+   from memory. Compaction becomes harmless because the state is re-derived, not recalled.
+2. **Two computable invariants make misses visible** — *terminality* (every discovered item ends
+   in a real state) and *saturation* (stop only when a full pass adds nothing new). `closeout.py`
+   refuses "exhausted" while **any** frontier item is OPEN (`new`/`in_progress`/`lead`).
+3. **Open-world discovery** — every new element/param/anomaly appends a frontier item
+   (`--derived-from`); a static to-do list misses later-discovered surface.
+4. **Signal-gated depth** — one cheap probe per element; **no signal ⇒ `tested_clean`, move on**;
+   a signal promotes to `lead` and earns the depth budget.
+5. **Interpretation is required output** of every probe — the transport tool is not the work; a
+   fired request with no interpretation is an **invalid step** (the anti-tunnel-vision rule).
+6. **Fresh-eyes audit** (`prompts/coverage-audit.md`) from a clean context; its findings become
+   frontier items. The context that missed cannot see that it missed.
+7. **Gates over prose** — eligibility and verification are enforced (verification has an explicit
+   all-yes checklist in `write-poc.md`); structure lives in code where it must hold, prose only
+   where it is a prior.
+
 ## L-13 (2026-09-17) — confirm a class is an accepted bounty on THAT program BEFORE testing it, not after
 
 **What happened:** review feedback — a session must not spend effort proving a class the program

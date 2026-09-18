@@ -20,8 +20,20 @@ Do breadth first; it costs little and often lands a valid finding before you inv
    and move on (`attack-loop.md`). Do not report excluded classes.
 2. **Bounded, not a scan.** One probe per observable param/endpoint, log, move on. No heavy payload
    fuzzing. This is a sprint, not a scan — time-box it.
-3. **A hit still needs boundary-crossing proof.** A reflection is not XSS until it executes in a
+3. **Signal-gated depth.** Every LHF surface gets one *cheap* probe and a terminal outcome. If there
+   is **no signal**, close it — `frontier.py set <id> --state tested_clean` — and move on. Never dig
+   on a hunch. If there **is** a signal (a reflection, a differential, an odd status/body/timing, a
+   leaked error), promote it — `frontier.py signal <id> "..."` — and spend the depth budget there.
+   Depth is earned by evidence.
+4. **A hit still needs boundary-crossing proof.** A reflection is not XSS until it executes in a
    real browser context with escaping bypassed (`prompts/write-poc.md`). A `200` is not a leak.
+5. **A negative battery is ONE result, not coverage.** On a hardened/mature target the whole battery
+   can come back negative in an hour — that is expected, and it is fine, but it is **one cell**
+   (anonymous/reflected classes) of the attacker-context × class × feature matrix, not "the target is
+   clean". When the battery saturates with zero signals, do **not** re-run it with more payloads:
+   escalate to the featured/stateful cells or state the ceiling plainly in the summary. box_private
+   produced ~23 consecutive negatives across the cheap classes; the discipline failure was treating
+   that as progress (`LEARNINGS.md` L-16).
 
 ## The battery (ordered by cheapness × acceptance)
 1. **Reflected / HTML injection** — for each reflected param, inject a unique marker
@@ -52,7 +64,9 @@ Do breadth first; it costs little and often lands a valid finding before you inv
    `/actuator`, `/api/docs`, backup/config paths.
 
 ## Output
-Log **every** attempt in `log.jsonl` (result + evidence). Boundaries crossed → `findings.jsonl`
-(`verified: true`) or `leads.jsonl` (chain candidates). Update the element's `coverage-map.jsonl`
-row **at test time** (`unauth_tested` / `authed_tested`). A cheap pass is not an excuse to leave the
-map stale.
+Log **every** attempt in `log.jsonl` (result + evidence). Each probe is a **frontier item**:
+`frontier.py add --element "..." --hypothesis "..." --budget cheap` up front, then
+`frontier.py set <id> --state tested_clean|excluded|needs_B|blocked` (or `signal` it) when the
+result is in — and write the element's `coverage-map.jsonl` row in the same step. Boundaries
+crossed → `findings.jsonl` (`verified: true`) or `leads.jsonl` (chain candidates). A cheap pass is
+not an excuse to leave the frontier or the map stale.

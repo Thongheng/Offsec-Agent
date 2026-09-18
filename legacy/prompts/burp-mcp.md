@@ -3,6 +3,19 @@
 Reference for driving Burp Suite through the local MCP server. Verified against the
 server source (`/Users/thonghengheu/Coding/burp-mcp-server`, Tools.kt) and live use.
 
+## The tool is transport, not the work
+
+Burp is how a request reaches the origin and how the human sees it — it is **not** the analysis.
+Do not let the loop turn into "drive Burp": the required output of every Burp call is an
+*interpretation* of the response (what it shows, what it implies), recorded in `log.jsonl` and,
+if it changes the plan, as a `frontier.py` item. Two habits that prevent tunnel vision:
+
+- **Read the saved delta, not the history dump.** Pull the specific response (or the saved
+  `areas/runs/*.http` body) and read *that*; don't paste whole `get_proxy_http_history` output
+  into context — it buries the target data you actually need to reason about.
+- **Fire → interpret → append.** A fired request with no interpretation is an invalid step
+  (`prompts/attack-loop.md`, "The iteration protocol").
+
 ## Running it
 
 ```bash

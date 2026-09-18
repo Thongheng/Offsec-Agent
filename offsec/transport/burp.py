@@ -5,9 +5,9 @@ initialize -> tools/list -> tools/call. Synchronous, one command per invocation
 (each run re-handshakes; Burp's server allows multiple sessions).
 
 Usage:
-  python3 tools/burp_mcp.py tools
-  python3 tools/burp_mcp.py call <tool_name> '{"json": "args"}'
-  python3 tools/burp_mcp.py history [--all]   # proxy history -> <engagement>/proxy-history.jsonl
+  python3 -m offsec.transport.burp tools
+  python3 -m offsec.transport.burp call <tool_name> '{"json": "args"}'
+  python3 -m offsec.transport.burp history [--all]   # proxy history -> <engagement>/proxy-history.jsonl
 """
 import base64, json, os, re, socket, sys, threading, queue, urllib.request
 from urllib.parse import urlsplit
@@ -137,9 +137,9 @@ def main():
         print(__doc__); return 2
     cmd = sys.argv[1]
     if cmd == "history":
-        from engagement import engagement_root
+        from .. import config
         in_scope = "--all" not in sys.argv[2:]
-        cmd_history(str(engagement_root()), in_scope_only=in_scope)
+        cmd_history(str(config.target_dir()), in_scope_only=in_scope)
         return 0
     mcp = SseMcp()
     mcp.initialize()
@@ -274,8 +274,8 @@ def _path_ext(path: str) -> str:
 
 def _host_allowed(cfg: dict, host: str) -> bool:
     try:
-        from scope_check import check_target
-        return bool(check_target(cfg, host).get("allowed"))
+        from ..gates import scope as _scope
+        return bool(_scope.check_target(cfg, host).get("allowed"))
     except Exception:
         return False
 
@@ -292,9 +292,9 @@ def cmd_history(eng_dir: str, in_scope_only: bool = True) -> None:
     cfg = None
     if in_scope_only:
         try:
-            from scope_check import load_scope
-            from engagement import scope_file
-            cfg = load_scope(str(scope_file()))
+            from .. import config as _cfg
+            from ..gates import scope as _scope
+            cfg = _scope.load_scope(str(_cfg.scope_path()))
             print("filter: scope.yaml + static-extension drop (use --all for raw history)")
         except Exception as e:
             print(f"scope filter unavailable ({e}); writing unfiltered history")
@@ -303,7 +303,8 @@ def cmd_history(eng_dir: str, in_scope_only: bool = True) -> None:
         while True:
             r = mcp.rpc("tools/call", {"name": "get_proxy_http_history",
                 "arguments": {"count": count, "offset": offset, "inScopeOnly": False,
-                              "newestFirst": False}}, id_=offset + 100, timeout=120)
+                              "newestFirst": False, "maxItemLength": 200000}},
+                id_=offset + 100, timeout=120)
             res = r.get("result", {})
             if res.get("isError"):
                 print(f"tool error: {json.dumps(res)[:200]}"); break

@@ -72,3 +72,25 @@ Rules:
 6. **Sanity**: run `python3 tools/poc_replay.py <bundle> --dry-run --var ...` before handing
    over — it validates the scope check, placeholders, and request parse. Then hand the raw
    request to the human for confirmation in Burp Repeater (the verification gate).
+
+## Before `verified: true` — the checklist (every line must be YES)
+
+A finding is only `verified` when **all** of these hold. Any "no" → it stays `verified: false`
+(a candidate), however convincing it looks.
+
+- [ ] **Reproduced** by the exact bundle, ideally 3× — not "worked once".
+- [ ] **Positive control** passes (the legitimate principal can do it; the object/id is real —
+      rules out "denied for everyone").
+- [ ] **Negative control** fails (the attacker is denied on the normal path / a non-owned id) —
+      **mandatory for any access-control finding**.
+- [ ] **Provenance**: the attacker received data or an effect **provably owned by the other
+      principal** (their unique value / a planted marker), or a concrete state delta — not a `200`.
+- [ ] **Artifacts ruled out**: not explained by caching, my own session, the WAF, or a stale value.
+- [ ] **Eligible**: in scope, class not excluded (`python3 tools/h1.py rules <handle>`); otherwise
+      it is chain-or-kill or a candidate, never a standalone report.
+- [ ] **Novelty**: not already documented (product docs/changelog) or disclosed (hacktivity) — or
+      the differentiator is stated (same class on a *different* endpoint is not a duplicate).
+- [ ] **Impact** stated in the program's terms (what an attacker actually gains).
+
+Record the checklist outcome with the finding in `findings.jsonl` (`evidence`) so a reviewer can
+see the controls, not just the marker.
