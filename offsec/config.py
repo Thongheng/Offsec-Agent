@@ -113,6 +113,8 @@ DEFAULT_TARGET_YAML: dict = {
     "dependencies": [],
     "features": {},
     "kill_test": None,
+    "kill_tests": [],
+    "kill_test_override": None,
     "yield": None,
 }
 

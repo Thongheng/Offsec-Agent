@@ -8,13 +8,13 @@ Record a candidate as soon as you see it, then promote it only when verified:
 ```
 offsec evidence --title "..." --class ... --candidate --impact "..."       # candidate
 python3 -m offsec.verify.poc pocs/F-0001.poc.md --var HOST=...             # replay gate
-offsec evidence --title "..." --class ... --verified --poc pocs/F-0001.poc.md --impact "..."  # verified
+offsec evidence --title "..." --class ... --verified --validator-ok --poc pocs/F-0001.poc.md --impact "..."  # verified
 offsec shapes match --handle <h> --title "..." --class ...
 ```
 
 The checklist below is mandatory, and promotion to `verified: true` is blocked in
-the CLI until replay succeeds, an existing PoC bundle is supplied, or a human
-override reason is recorded:
+the CLI until replay succeeds or a human override reason is recorded. A PoC file
+by itself is only a bundle on disk; it is not proof that replay passed.
 
 ```
 offsec evidence --title "..." --verified --validator-ok --impact "..."

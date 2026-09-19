@@ -79,8 +79,12 @@ def _gate(cur: str, nxt: str, name: str | None) -> tuple[bool, list[str]]:
             r.append("no focus features selected (1-3 required)")
         if len(feats) > MAX_FEATURES:
             r.append(f"{len(feats)} features > {MAX_FEATURES} — narrow to the accepted shapes")
-        if not t.get("kill_test"):
+        kill_tests = _kill_tests(t)
+        if not kill_tests:
             r.append("no kill_test recorded (reach one accepted-shape feature on a usable tier, <=1h)")
+        elif len(kill_tests) < 3 and not t.get("kill_test_override"):
+            r.append(f"{len(kill_tests)} kill_test(s) recorded; run 3-5 candidates or "
+                     "pass --override-reason")
         if not t.get("yield"):
             r.append("no yield assessment recorded (accepted-shapes x enabled-features x contexts)")
         return (not r), r
@@ -164,12 +168,31 @@ def slice_set(name: str | None, fid: str, step: str, done: bool = True) -> tuple
 
 # ---- select records ---------------------------------------------------------
 
-def set_kill_test(name: str | None, candidate: str, result: str, evidence: str = "") -> None:
+def _kill_tests(t: dict) -> list[dict]:
+    tests = list(t.get("kill_tests") or [])
+    legacy = t.get("kill_test")
+    if legacy and not tests:
+        tests.append(legacy)
+    return tests
+
+
+def set_kill_test(name: str | None, candidate: str, result: str, evidence: str = "",
+                  override_reason: str = "") -> None:
     t = config.load_target(name)
-    t["kill_test"] = {"candidate": candidate, "result": result, "evidence": evidence}
+    entry = {"candidate": candidate, "result": result, "evidence": evidence}
+    tests = _kill_tests(t)
+    tests.append(entry)
+    t["kill_tests"] = tests
+    t["kill_test"] = entry
+    if override_reason:
+        t["kill_test_override"] = override_reason
     config.save_target(t, name)
     events.append("decision", name, target=f"killtest:{candidate}", hypothesis="reach one accepted-shape feature <=1h",
                   result=result, evidence=evidence, notes="portfolio kill test")
+    if override_reason:
+        events.append("decision", name, target="killtest:override",
+                      hypothesis="fewer than 3 candidate kill tests",
+                      result="accepted", notes=override_reason)
 
 
 def set_yield(name: str | None, shapes: int, enabled: int, contexts: int, notes: str = "") -> None:

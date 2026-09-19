@@ -9,11 +9,19 @@ reachability decision.
 - can you reach **one accepted-shape feature on a usable tier** — at the shape, not just
   a page that loads?
 
-**Record the kill test and the yield assessment** so the gate can check them:
+**Record each kill test and the yield assessment** so the gate can check them:
 
 ```
 offsec killtest --candidate <h> --result hit|miss|partial --evidence "..."
 offsec yield --shapes <#accepted shapes> --enabled <#reachable features> --contexts <#> --notes "..."
+```
+
+The select gate expects 3-5 candidate kill tests. If the engagement is a private
+single-target pentest or fewer candidates are legitimately available, record the
+reason explicitly:
+
+```
+offsec killtest --candidate <h> --result hit --evidence "..." --override-reason "private engagement has one authorized target"
 ```
 
 `huntable_cells = shapes x enabled x contexts`. A small intersection means a scope
@@ -29,5 +37,6 @@ on disclosed counts, exclusion lists, or payout.
 offsec feature add F1 --name "sharing/collaboration permissions"
 ```
 
-Gate `select -> provision`: `offsec advance` passes only when 1-3 features exist, a
-kill test is recorded, and a yield assessment is recorded.
+Gate `select -> provision`: `offsec advance` passes only when 1-3 features exist,
+3+ kill tests are recorded (or an override reason exists), and a yield assessment
+is recorded.

@@ -10,7 +10,6 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from pathlib import Path
 
 from . import config, derive, events, machine
 from .gates import scope
@@ -94,6 +93,15 @@ def cmd_signal(a) -> int:
 
 @_targetless
 def cmd_lead(a) -> int:
+    if a.resolve:
+        ev = events.append("decision", target=f"lead:{a.resolve}", hypothesis="resolve lead",
+                           result=a.result, evidence=a.evidence, notes=a.note)
+        print(json.dumps(ev))
+        return 0
+    if not a.target or not a.observation:
+        print("error: lead requires --target and --observation unless --resolve is used",
+              file=sys.stderr)
+        return 2
     ev = events.append("lead", target=a.target, observation=a.observation, why=a.why,
                        follow_up=a.follow_up, feature=a.feature)
     print(json.dumps(ev))
@@ -105,21 +113,13 @@ def cmd_evidence(a) -> int:
     verified = bool(a.verified)
     validator_reason = None
     if verified:
-        poc_ok = False
-        if a.poc:
-            poc_path = Path(a.poc).expanduser()
-            poc_ok = poc_path.exists()
-            if not poc_ok and not poc_path.is_absolute():
-                poc_ok = (config.target_dir() / poc_path).exists()
         validator_ok = bool(a.validator_ok)
         override_ok = bool(a.human_override)
-        if not (poc_ok or validator_ok or override_ok):
-            print("BLOCKED: --verified requires an existing --poc bundle, "
-                  "--validator-ok, or --human-override with a reason. "
+        if not (validator_ok or override_ok):
+            print("BLOCKED: --verified requires --validator-ok or "
+                  "--human-override with a reason. "
                   "Recording candidate evidence instead.", file=sys.stderr)
             verified = False
-        elif poc_ok:
-            validator_reason = "poc_bundle_exists"
         elif validator_ok:
             validator_reason = "validator_ok"
         else:
@@ -195,7 +195,8 @@ def cmd_derive(a) -> int:
 
 @_targetless
 def cmd_killtest(a) -> int:
-    machine.set_kill_test(None, a.candidate, a.result, a.evidence or "")
+    machine.set_kill_test(None, a.candidate, a.result, a.evidence or "",
+                          a.override_reason or "")
     print(f"kill test: {a.candidate} -> {a.result}")
     return 0
 
@@ -342,6 +343,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--candidate", required=True)
     s.add_argument("--result", required=True, choices=["hit", "miss", "partial"])
     s.add_argument("--evidence", default=None)
+    s.add_argument("--override-reason", default=None,
+                   help="reason fewer than 3 portfolio kill tests are acceptable")
     s.set_defaults(fn=cmd_killtest)
     s = sub.add_parser("yield")
     s.add_argument("--shapes", type=int, required=True)
@@ -421,11 +424,16 @@ def build_parser() -> argparse.ArgumentParser:
     s.set_defaults(fn=cmd_signal)
 
     s = sub.add_parser("lead")
-    s.add_argument("--target", required=True)
-    s.add_argument("--observation", required=True)
+    s.add_argument("--target", default=None)
+    s.add_argument("--observation", default=None)
     s.add_argument("--why", default=None)
     s.add_argument("--follow-up", dest="follow_up", default=None)
     s.add_argument("--feature", default=None)
+    s.add_argument("--resolve", default=None, help="lead id to resolve, e.g. L-0001")
+    s.add_argument("--result", default="killed",
+                   choices=["killed", "chained", "verified", "duplicate"])
+    s.add_argument("--evidence", default=None)
+    s.add_argument("--note", default=None)
     s.set_defaults(fn=cmd_lead)
 
     s = sub.add_parser("evidence")

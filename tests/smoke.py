@@ -68,6 +68,14 @@ def main() -> int:
         check("unreferenced signal becomes an open lead item",
               any(i["state"] == "lead" for i in v["frontier"]))
         check("open frontier blocks closeout", derive.exhaustion_gaps(v) != [])
+        events.append("lead", target="chain candidate", observation="odd invite state")
+        v = derive.replay()
+        check("lead event starts open", any(i["state"] == "open" for i in v["leads"]))
+        rc = cli.main(["lead", "--resolve", "L-0001", "--result", "killed",
+                       "--evidence", "no boundary crossed"])
+        v = derive.replay()
+        check("lead resolution closes lead", rc == 0
+              and all(i["state"] != "open" for i in v["leads"]))
 
         print("feature-slice gate")
         machine.feature_add(None, "F1", "sharing")
@@ -114,8 +122,23 @@ def main() -> int:
         rc = cli.main(["evidence", "--title", "poc bundle", "--verified",
                        "--poc", "pocs/F-0001.poc.md", "--impact", "x"])
         last = events.tail(1)[0]
-        check("target-relative poc bundle allows verified evidence", rc == 0
-              and last["verified"] is True and last["validator"] == "poc_bundle_exists")
+        check("poc bundle alone does not allow verified evidence", rc == 1
+              and last["verified"] is False)
+
+        print("kill-test portfolio gate")
+        machine.feature_add(None, "F2", "billing")
+        machine.set_kill_test(None, "a", "hit", "enabled shape")
+        machine.set_yield(None, 1, 1, 2, "small but real")
+        t = config.load_target()
+        t["phase"] = "select"
+        config.save_target(t)
+        ok, nxt, reasons = machine.can_advance(None)
+        check("one kill test blocks select gate without override", not ok
+              and any("kill_test" in r for r in reasons))
+        machine.set_kill_test(None, "b", "partial", "signup only")
+        machine.set_kill_test(None, "c", "miss", "tier gated")
+        ok, nxt, reasons = machine.can_advance(None)
+        check("three kill tests allow select gate", ok and nxt == "provision")
     finally:
         os.environ.pop("OFFSEC_TARGET", None)
         shutil.rmtree(tmp, ignore_errors=True)

@@ -128,6 +128,15 @@ def replay(name: str | None = None) -> dict:
             if ref and ref in frontier and ev.get("result") in ("killed", "duplicate", "excluded"):
                 frontier[ref].update({"state": ev["result"], "evidence": ev.get("evidence"),
                                       "updated": ev.get("ts")})
+            target = str(ev.get("target") or "")
+            if target.startswith("lead:"):
+                lid = target.split(":", 1)[1]
+                for lead in leads:
+                    if lead.get("id") == lid:
+                        lead.update({"state": ev.get("result") or "resolved",
+                                     "resolution": ev.get("notes") or ev.get("evidence"),
+                                     "evidence": ev.get("evidence"),
+                                     "updated": ev.get("ts")})
             decisions.append(ev)
         elif kind == "phase":
             phases.append(ev)
